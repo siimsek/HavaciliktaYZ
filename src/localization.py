@@ -58,6 +58,9 @@ class VisualOdometry:
         # En son bilinen GPS pozisyonu (kalibrasyon referansı)
         self._last_gps_position: Optional[Dict[str, float]] = None
 
+        # GPS → Optik Akış geçiş takibi
+        self._was_gps_healthy: bool = False
+
         # Önceki kare bilgisi (Optik Akış için)
         self._prev_gray: Optional[np.ndarray] = None
         self._prev_points: Optional[np.ndarray] = None
@@ -98,9 +101,12 @@ class VisualOdometry:
 
         Hibrit Mantık:
             IF gps_health == 1:
-                → Sunucu verisini kullan, sistemi kalibre et
+                → Sunucu verisini kullan, gri kareyi son GPS karesi olarak sakla
             IF gps_health == 0:
                 → Optik Akış ile piksel kaydırma hesapla, metreye çevir
+
+        Optimizasyon: GPS modunda Shi-Tomasi köşe tespiti YAPILMAZ.
+        Referans kare sadece GPS→OF geçişinde bir kez oluşturulur.
 
         Args:
             frame: BGR formatlı OpenCV görüntüsü.
@@ -117,12 +123,22 @@ class VisualOdometry:
         if gps_health == 1:
             # ========== GPS SAĞLIKLI: Sunucu verisini kullan ==========
             self._update_from_gps(server_data)
-            # Referans karesini güncelle (kalibrasyon)
-            self._update_reference_frame(gray)
+            # Gri kareyi sakla ama köşe tespiti YAPMA (performans)
+            # GPS→OF geçişinde bu kare referans olarak kullanılacak
+            self._prev_gray = gray
+            self._was_gps_healthy = True
 
         else:
             # ========== GPS SAĞLIKSIZ: Optik Akış ile kestirim ==========
-            if self._prev_gray is not None:
+            if self._was_gps_healthy:
+                # GPS → OF geçişi: referans kareyi şimdi oluştur
+                self._update_reference_frame(
+                    self._prev_gray if self._prev_gray is not None else gray
+                )
+                self._was_gps_healthy = False
+                self.log.info("GPS → Optik Akış geçişi — referans kare oluşturuldu")
+
+            if self._prev_gray is not None and self._prev_points is not None:
                 self._update_from_optical_flow(gray, server_data)
             else:
                 self.log.warn(

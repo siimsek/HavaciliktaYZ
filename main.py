@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import signal
+import traceback
 from typing import Optional
 
 import torch
@@ -173,6 +174,7 @@ def main() -> None:
         log.warn("\nKapatma sinyali alındı (Ctrl+C) — döngü durduruluyor...")
 
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)  # Docker/systemd uyumu
 
     while running:
         try:
@@ -250,6 +252,7 @@ def main() -> None:
             # ===== GLOBAL HATA YAKALAMA =====
             # Sistem ASLA çökmemeli — hata logla, devam et
             log.error(f"İşlem hatası: {e}")
+            log.error(f"Stack trace:\n{traceback.format_exc()}")
             log.warn("Sonraki kareye geçiliyor...")
             time.sleep(0.5)  # Hata döngüsüne girmeyi engelle
 

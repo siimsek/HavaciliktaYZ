@@ -16,6 +16,8 @@ Kullanım:
     detections = detector.detect(frame)
 """
 
+import os
+from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -64,6 +66,11 @@ class ObjectDetector:
         # Model Yükleme (Yerel Diskten - OFFLINE MODE)
         self.log.info(f"YOLOv8 modeli yükleniyor: {Settings.MODEL_PATH}")
         try:
+            if not os.path.exists(Settings.MODEL_PATH):
+                raise FileNotFoundError(
+                    f"Model dosyası bulunamadı: {Settings.MODEL_PATH}\n"
+                    f"  → 'models/' dizinine yolov8n.pt dosyasını kopyalayın."
+                )
             self.model = YOLO(Settings.MODEL_PATH)
             self.model.to(self.device)
 
@@ -152,9 +159,13 @@ class ObjectDetector:
                     continue
 
                 for box in result.boxes:
-                    coco_id = int(box.cls[0].item())
-                    conf = float(box.conf[0].item())
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    coco_id: int = int(box.cls[0].item())
+                    conf: float = float(box.conf[0].item())
+                    coords = box.xyxy[0].tolist()
+                    x1: float = float(coords[0])
+                    y1: float = float(coords[1])
+                    x2: float = float(coords[2])
+                    y2: float = float(coords[3])
 
                     # COCO → TEKNOFEST eşleştirme
                     tf_id = Settings.COCO_TO_TEKNOFEST.get(coco_id, -1)
@@ -165,11 +176,11 @@ class ObjectDetector:
                     raw_detections.append({
                         "cls_int": tf_id,
                         "cls": str(tf_id),
-                        "confidence": round(float(conf), 4),
-                        "top_left_x": round(float(x1), 2),
-                        "top_left_y": round(float(y1), 2),
-                        "bottom_right_x": round(float(x2), 2),
-                        "bottom_right_y": round(float(y2), 2),
+                        "confidence": int(conf * 10000) / 10000,  # 4 ondalık
+                        "top_left_x": int(x1),
+                        "top_left_y": int(y1),
+                        "bottom_right_x": int(x2),
+                        "bottom_right_y": int(y2),
                         "bbox": (x1, y1, x2, y2),  # dahili hesaplama için
                     })
 
@@ -192,13 +203,16 @@ class ObjectDetector:
                     "confidence": det["confidence"],  # debug için tutuyoruz
                 })
 
-            self.log.debug(
-                f"Tespit: {len(output)} nesne "
-                f"(Taşıt: {sum(1 for d in output if d['cls']=='0')}, "
-                f"İnsan: {sum(1 for d in output if d['cls']=='1')}, "
-                f"UAP: {sum(1 for d in output if d['cls']=='2')}, "
-                f"UAİ: {sum(1 for d in output if d['cls']=='3')})"
-            )
+            # Debug log — tek geçişte sınıf sayımı (Counter ile)
+            if Settings.DEBUG:
+                cls_counts = Counter(d["cls"] for d in output)
+                self.log.debug(
+                    f"Tespit: {len(output)} nesne "
+                    f"(Taşıt: {cls_counts.get('0', 0)}, "
+                    f"İnsan: {cls_counts.get('1', 0)}, "
+                    f"UAP: {cls_counts.get('2', 0)}, "
+                    f"UAİ: {cls_counts.get('3', 0)})"
+                )
 
             # ---- GPU Bellek Temizliği (periyodik) ----
             self._frame_count += 1
@@ -349,41 +363,6 @@ class ObjectDetector:
 
         return inter_area / landing_area
 
-    @staticmethod
-    def _calculate_iou(
-        box_a: Tuple[float, float, float, float],
-        box_b: Tuple[float, float, float, float],
-    ) -> float:
-        """
-        İki bounding box arasındaki IoU (Intersection over Union) değerini hesaplar.
-
-        Args:
-            box_a: (x1, y1, x2, y2) formatında ilk kutu.
-            box_b: (x1, y1, x2, y2) formatında ikinci kutu.
-
-        Returns:
-            0.0 ile 1.0 arasında IoU değeri.
-        """
-        inter_x1 = max(box_a[0], box_b[0])
-        inter_y1 = max(box_a[1], box_b[1])
-        inter_x2 = min(box_a[2], box_b[2])
-        inter_y2 = min(box_a[3], box_b[3])
-
-        inter_w = max(0.0, inter_x2 - inter_x1)
-        inter_h = max(0.0, inter_y2 - inter_y1)
-        inter_area = inter_w * inter_h
-
-        if inter_area == 0:
-            return 0.0
-
-        area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
-        area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
-        union_area = area_a + area_b - inter_area
-
-        if union_area == 0:
-            return 0.0
-
-        return inter_area / union_area
 
     # =========================================================================
     #  KENAR TEMAS KONTROLÜ

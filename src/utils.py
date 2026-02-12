@@ -14,7 +14,6 @@ Kullanım:
 import os
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 import cv2

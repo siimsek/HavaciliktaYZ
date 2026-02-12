@@ -105,12 +105,10 @@ class Settings:
         8: 0,    # boat → Taşıt (deniz taşıtı)
     }
 
-    # UAP/UAİ Renk Kodları (şartnameden)
-    UAP_COLORS: list = ["#89cff0", "#ffffff"]  # Mavi + Beyaz
-    UAI_COLORS: list = ["#ff0000", "#ffffff"]   # Kırmızı + Beyaz
-
-    # İniş alanı üzerine nesne kontrolü için IoU eşiği
-    LANDING_IOU_THRESHOLD: float = 0.01
+    # İniş alanı üzerine nesne kontrolü için kesişim eşiği
+    # Şartname: "Herhangi bir nesne varsa iniş için uygun değildir"
+    # Bu yüzden eşik 0.0 — herhangi bir kesişim = uygun değil
+    LANDING_IOU_THRESHOLD: float = 0.0
 
     # =========================================================================
     #  KAMERA PARAMETRELERİ (Yarışma günü kalibrasyon ile güncellenecek)

@@ -262,9 +262,8 @@ class NetworkManager:
             Gönderim başarılı ise True.
         """
         # 'confidence' alanını çıkar — şartnameye uygun JSON oluştur
-        clean_objects: List[Dict] = []
-        for obj in detected_objects:
-            clean_obj = {
+        clean_objects: List[Dict] = [
+            {
                 "cls": obj["cls"],
                 "landing_status": obj["landing_status"],
                 "top_left_x": obj["top_left_x"],
@@ -272,7 +271,8 @@ class NetworkManager:
                 "bottom_right_x": obj["bottom_right_x"],
                 "bottom_right_y": obj["bottom_right_y"],
             }
-            clean_objects.append(clean_obj)
+            for obj in detected_objects
+        ]
 
         # Sonuç paketini oluştur (Şartname formatı)
         payload: Dict[str, Any] = {
@@ -354,9 +354,10 @@ class NetworkManager:
         İlk yüklemeden sonra belleğe cache'ler — her karede
         diskten okuma yapmaz (önemli performans iyileştirmesi).
         """
-        # Cache varsa doğrudan döndür (her karede diskten okuma)
+        # Cache varsa doğrudan döndür — YOLO ve cvtColor kendi kopyalarını
+        # oluşturur, bu yüzden .copy() gereksiz (bellek+CPU tasarrufu)
         if self._sim_image_cache is not None:
-            return self._sim_image_cache.copy()
+            return self._sim_image_cache
 
         img_path = Settings.SIMULATION_IMAGE_PATH
         frame = cv2.imread(img_path)
@@ -368,7 +369,7 @@ class NetworkManager:
         # Cache'e kaydet
         self._sim_image_cache = frame
         self.log.debug(f"Simülasyon görseli yüklendi ve cache'lendi: {frame.shape[1]}x{frame.shape[0]}")
-        return frame.copy()
+        return frame
 
     def _validate_frame_data(self, data: Dict[str, Any]) -> bool:
         """
