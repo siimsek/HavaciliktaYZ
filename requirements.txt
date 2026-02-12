@@ -1,0 +1,12 @@
+# TEKNOFEST Havacılıkta Yapay Zeka - Bağımlılıklar
+# =================================================
+# Kurulum: pip install -r requirements.txt
+# Not: PyTorch CUDA sürümü zaten venv'de mevcut
+
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+requests>=2.31.0
+colorama>=0.4.6
