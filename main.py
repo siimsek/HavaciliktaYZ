@@ -463,39 +463,72 @@ def _print_summary(log: Logger, fps_counter: FPSCounter) -> None:
     log.success("Sistem kapatıldı. Güle güle! 👋")
 
 
-def parse_args() -> argparse.Namespace:
-    """Komut satırı argümanlarını ayrıştırır."""
-    parser = argparse.ArgumentParser(
-        description="TEKNOFEST 2025 — Havacılıkta Yapay Zeka Sistemi",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Örnekler:
-  python main.py                  Yarışma/simülasyon modu (settings.py'ye göre)
-  python main.py --simulate       Otonom test (VisDrone VID — sıralı kareler)
-  python main.py --simulate det   Otonom test (VisDrone DET — tekil fotoğraflar)
-        """,
+def _ask_choice(prompt: str, options: dict) -> str:
+    """
+    Kullanıcıdan geçerli bir seçim ister.
+
+    Args:
+        prompt: Kullanıcıya gösterilecek soru.
+        options: {tuş: açıklama} sözlüğü.
+
+    Returns:
+        Seçilen tuş (string).
+    """
+    print()
+    print(prompt)
+    for key, desc in options.items():
+        print(f"  [{key}] {desc}")
+    print()
+
+    while True:
+        choice = input("  Seçiminiz: ").strip()
+        if choice in options:
+            return choice
+        print(f"  ⚠ Geçersiz seçim! Lütfen {', '.join(options.keys())} girin.")
+
+
+def show_interactive_menu() -> dict:
+    """
+    Başlangıç menüsünü gösterir ve kullanıcı tercihlerini toplar.
+
+    Returns:
+        Dict: mode, prefer_vid, show, save anahtarları.
+    """
+    print("\n" + "═" * 56)
+    print("  🎯  ÇALIŞMA MODU SEÇİMİ")
+    print("═" * 56)
+
+    # 1) Mod seçimi
+    mode = _ask_choice(
+        "  Hangi modda çalıştırmak istiyorsunuz?",
+        {
+            "1": "🏆  Yarışma Modu (sunucu bağlantısı)",
+            "2": "🎬  Otonom Test — VID (sıralı kareler, Görev 2)",
+            "3": "📸  Otonom Test — DET (tekil fotoğraflar, Görev 1)",
+        },
     )
-    parser.add_argument(
-        "--simulate",
-        nargs="?",
-        const="vid",
-        default=None,
-        choices=["vid", "det"],
-        help="Otonom test modu: 'vid' (sıralı kareler, Görev 2) veya 'det' (tekil kareler, Görev 1)",
+
+    if mode == "1":
+        return {"mode": "competition", "prefer_vid": True, "show": False, "save": False}
+
+    prefer_vid = (mode == "2")
+
+    # 2) Görsel çıktı seçimi
+    print("\n" + "─" * 56)
+    output = _ask_choice(
+        "  Sonuçları nasıl görmek istiyorsunuz?",
+        {
+            "1": "📊  Sadece terminal çıktısı (en hızlı)",
+            "2": "🖥️   Canlı pencerede göster (cv2.imshow)",
+            "3": "💾  Kareleri diske kaydet (debug_output/)",
+            "4": "🖥️💾 Hem pencerede göster hem kaydet",
+        },
     )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        default=False,
-        help="Tespit sonuçlarını canlı pencerede göster (cv2.imshow)",
-    )
-    parser.add_argument(
-        "--save",
-        action="store_true",
-        default=False,
-        help="Her kareyi bounding box'larıyla debug_output/ dizinine kaydet",
-    )
-    return parser.parse_args()
+
+    show = output in ("2", "4")
+    save = output in ("3", "4")
+
+    return {"mode": "simulate", "prefer_vid": prefer_vid, "show": show, "save": save}
 
 
 # =============================================================================
@@ -506,22 +539,27 @@ def main() -> None:
     """
     Sistemin ana giriş noktası.
 
-    --simulate argümanı verilmişse otonom test modu,
-    aksi halde yarışma/sunucu modu çalıştırılır.
+    Kullanıcıya interaktif menü sunar — seçimlere göre
+    yarışma veya otonom test modu başlatılır.
     """
-    args = parse_args()
     log = Logger("Main")
 
-    simulate = args.simulate is not None
+    # Banner
+    print(BANNER)
+
+    # İnteraktif menü
+    choices = show_interactive_menu()
+
+    # Sistem bilgisi
+    simulate = (choices["mode"] == "simulate")
     print_system_info(log, simulate=simulate)
 
     if simulate:
-        prefer_vid = (args.simulate == "vid")
         run_simulation(
             log,
-            prefer_vid=prefer_vid,
-            show=args.show,
-            save=args.save,
+            prefer_vid=choices["prefer_vid"],
+            show=choices["show"],
+            save=choices["save"],
         )
     else:
         run_competition(log)

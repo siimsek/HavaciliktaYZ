@@ -101,6 +101,7 @@ class ObjectDetector:
             for i in range(Settings.WARMUP_ITERATIONS):
                 self.model.predict(
                     source=dummy,
+                    imgsz=Settings.INFERENCE_SIZE,
                     conf=Settings.CONFIDENCE_THRESHOLD,
                     device=self.device,
                     verbose=False,
@@ -144,12 +145,13 @@ class ObjectDetector:
             # ---- 1) YOLOv8 Inference ----
             results = self.model.predict(
                 source=frame,
+                imgsz=Settings.INFERENCE_SIZE,
                 conf=Settings.CONFIDENCE_THRESHOLD,
                 iou=Settings.NMS_IOU_THRESHOLD,
                 device=self.device,
-                verbose=False,    # Konsolu kirletmesin
-                save=False,       # Diske kaydetme (hız için)
-                half=self._use_half,  # FP16 optimizasyonu
+                verbose=False,
+                save=False,
+                half=self._use_half,
             )
 
             # ---- 2) COCO → TEKNOFEST Dönüşümü ----

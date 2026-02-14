@@ -54,7 +54,9 @@ class Settings:
     MODEL_PATH: str = str(PROJECT_ROOT / "models" / "yolov8n.pt")
 
     # Tespit Güven Eşiği (0.0 - 1.0)
-    CONFIDENCE_THRESHOLD: float = 0.25
+    # Düşük değer = daha fazla tespit, daha fazla false positive
+    # Drone görüntülerinde uzak/küçük nesneler için düşük tutulmalı
+    CONFIDENCE_THRESHOLD: float = 0.15
 
     # NMS IoU Eşiği (Non-Maximum Suppression)
     NMS_IOU_THRESHOLD: float = 0.45
@@ -64,6 +66,11 @@ class Settings:
 
     # FP16 Yarı Hassasiyet — RTX 3060'ta ~%40 hız artışı sağlar
     HALF_PRECISION: bool = True
+
+    # Inference Çözünürlüğü (piksel)
+    # 640 = varsayılan (hızlı ama küçük nesneleri kaçırır)
+    # 1280 = drone görüntüleri için önerilen (uzaktaki insanları yakalar)
+    INFERENCE_SIZE: int = 1280
 
     # Model ısınma tekrar sayısı (ilk kare gecikmesini önler)
     WARMUP_ITERATIONS: int = 3
