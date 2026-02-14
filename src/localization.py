@@ -68,9 +68,9 @@ class VisualOdometry:
 
         # ----- Shi-Tomasi Köşe Tespit Parametreleri -----
         self._feature_params = dict(
-            maxCorners=200,       # Takip edilecek maksimum köşe sayısı
+            maxCorners=100,       # Takip edilecek maksimum köşe sayısı (az ama yeterli)
             qualityLevel=0.01,    # Minimum köşe kalitesi (0-1)
-            minDistance=30,       # Köşeler arası minimum mesafe (piksel)
+            minDistance=40,       # Köşeler arası minimum mesafe (dengeli dağılım)
             blockSize=7,          # Analiz penceresi boyutu
         )
 

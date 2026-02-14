@@ -51,12 +51,13 @@ class Settings:
     # =========================================================================
 
     # YOLOv8 Model Dosyası (yerel diskten yüklenir - OFFLINE MODE)
-    MODEL_PATH: str = str(PROJECT_ROOT / "models" / "yolov8n.pt")
+    # yolov8s = Small model (11.2M param, mAP50: 44.9)
+    # yolov8n'den ~%20 daha doğru, hala 200+ FPS (FP16)
+    MODEL_PATH: str = str(PROJECT_ROOT / "models" / "yolov8s.pt")
 
     # Tespit Güven Eşiği (0.0 - 1.0)
-    # Düşük değer = daha fazla tespit, daha fazla false positive
-    # Drone görüntülerinde uzak/küçük nesneler için düşük tutulmalı
-    CONFIDENCE_THRESHOLD: float = 0.15
+    # yolov8s daha güvenilir sonuçlar verir → 0.20 yeterli
+    CONFIDENCE_THRESHOLD: float = 0.20
 
     # NMS IoU Eşiği (Non-Maximum Suppression)
     NMS_IOU_THRESHOLD: float = 0.45
@@ -68,9 +69,14 @@ class Settings:
     HALF_PRECISION: bool = True
 
     # Inference Çözünürlüğü (piksel)
-    # 640 = varsayılan (hızlı ama küçük nesneleri kaçırır)
-    # 1280 = drone görüntüleri için önerilen (uzaktaki insanları yakalar)
-    INFERENCE_SIZE: int = 1280
+    # yolov8s@640 > yolov8n@1280 (hem doğruluk hem hız)
+    INFERENCE_SIZE: int = 640
+
+    # Sınıflar arası NMS — aynı bölgede farklı sınıf çakışmalarını da bastırır
+    AGNOSTIC_NMS: bool = True
+
+    # Maksimum tespit sayısı (gereksiz sonuçları keser, hız kazanır)
+    MAX_DETECTIONS: int = 50
 
     # Model ısınma tekrar sayısı (ilk kare gecikmesini önler)
     WARMUP_ITERATIONS: int = 3
@@ -194,7 +200,7 @@ class Settings:
     LOOP_DELAY: float = 0.0
 
     # GPU Bellek Temizleme Aralığı (her N karede bir)
-    GPU_CLEANUP_INTERVAL: int = 100
+    GPU_CLEANUP_INTERVAL: int = 200
 
     # Debug görsel kaydetme aralığı (her N karede diske yaz)
     DEBUG_SAVE_INTERVAL: int = 50

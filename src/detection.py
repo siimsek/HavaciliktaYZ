@@ -96,18 +96,18 @@ class ObjectDetector:
         """
         self.log.info(f"Model ısınması başlıyor ({Settings.WARMUP_ITERATIONS} iterasyon)...")
         try:
-            # 640x640 dummy görüntü (YOLOv8 varsayılan input boyutu)
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-            for i in range(Settings.WARMUP_ITERATIONS):
-                self.model.predict(
-                    source=dummy,
-                    imgsz=Settings.INFERENCE_SIZE,
-                    conf=Settings.CONFIDENCE_THRESHOLD,
-                    device=self.device,
-                    verbose=False,
-                    save=False,
-                    half=self._use_half,
-                )
+            with torch.no_grad():
+                for i in range(Settings.WARMUP_ITERATIONS):
+                    self.model.predict(
+                        source=dummy,
+                        imgsz=Settings.INFERENCE_SIZE,
+                        conf=Settings.CONFIDENCE_THRESHOLD,
+                        device=self.device,
+                        verbose=False,
+                        save=False,
+                        half=self._use_half,
+                    )
             self.log.success(f"Model ısınması tamamlandı ✓")
         except Exception as e:
             self.log.warn(f"Warmup sırasında hata (görmezden geliniyor): {e}")
@@ -143,16 +143,19 @@ class ObjectDetector:
         """
         try:
             # ---- 1) YOLOv8 Inference ----
-            results = self.model.predict(
-                source=frame,
-                imgsz=Settings.INFERENCE_SIZE,
-                conf=Settings.CONFIDENCE_THRESHOLD,
-                iou=Settings.NMS_IOU_THRESHOLD,
-                device=self.device,
-                verbose=False,
-                save=False,
-                half=self._use_half,
-            )
+            with torch.no_grad():
+                results = self.model.predict(
+                    source=frame,
+                    imgsz=Settings.INFERENCE_SIZE,
+                    conf=Settings.CONFIDENCE_THRESHOLD,
+                    iou=Settings.NMS_IOU_THRESHOLD,
+                    device=self.device,
+                    verbose=False,
+                    save=False,
+                    half=self._use_half,
+                    agnostic_nms=Settings.AGNOSTIC_NMS,
+                    max_det=Settings.MAX_DETECTIONS,
+                )
 
             # ---- 2) COCO → TEKNOFEST Dönüşümü ----
             raw_detections: List[Dict] = []
