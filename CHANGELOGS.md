@@ -13,3 +13,6 @@
 ## 0.0.03 - 2026-02-21
 - Added sampled JSON logging controls (`ENABLE_JSON_LOGGING`, `JSON_LOG_EVERY_N_FRAMES`) and applied frame/result log sampling in `src/network.py` to reduce disk I/O pressure.
 - Removed duplicate image writes in simulation save mode by disabling Visualizer auto-save when per-frame save is already active.
+
+## 0.0.04 - 2026-02-21
+- Updated all year references in `README.md` from 2025 to 2026 to align project documentation with TEKNOFEST 2026 scope.

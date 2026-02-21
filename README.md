@@ -1,4 +1,4 @@
-# 🛩️ TEKNOFEST 2025 — Havacılıkta Yapay Zeka
+# 🛩️ TEKNOFEST 2026 — Havacılıkta Yapay Zeka
 
 <div align="center">
 
@@ -29,7 +29,7 @@
 
 ## 🎯 Proje Hakkında
 
-Bu proje, **TEKNOFEST 2025 Havacılıkta Yapay Zeka Yarışması** kapsamında geliştirilmiştir. Sistem iki ana görevi yerine getirir:
+Bu proje, **TEKNOFEST 2026 Havacılıkta Yapay Zeka Yarışması** kapsamında geliştirilmiştir. Sistem iki ana görevi yerine getirir:
 
 1. **Nesne Tespiti (Görev 1):** Drone kamera görüntülerinden taşıt, insan, UAP (Uçan Araba Park) ve UAİ (Uçan Ambulans İniş) alanlarını gerçek zamanlı tespit eder. İniş alanlarının uygunluk durumunu belirler.
 
@@ -273,7 +273,7 @@ Yarışma öncesi modeli eğitmek ve sistemi test etmek için kullanılabilecek 
 |---------|--------|-------------|------|
 | **VisDrone** | 260K+ kare, insan + araç | Drone perspektifi, çeşitli ortamlar | [GitHub](https://github.com/VisDrone/VisDrone-Dataset) |
 | **UAVDT** | 80K kare, araç tespiti | UAV yükseklik çeşitliliği | [Site](https://sites.google.com/view/grli-uavdt) |
-| **TEKNOFEST Resmi** | Örnek video (Mart 2025) | Yarışma formatı ile birebir uyumlu | [GitHub](https://github.com/TEKNOFEST-YARISMALAR/havacilikta-yapay-zeka-yarismasi) |
+| **TEKNOFEST Resmi** | Örnek video (Mart 2026) | Yarışma formatı ile birebir uyumlu | [GitHub](https://github.com/TEKNOFEST-YARISMALAR/havacilikta-yapay-zeka-yarismasi) |
 
 ### VisDrone ile Eğitim
 
@@ -293,7 +293,7 @@ bicycle       → Taşıt (0)
 tricycle      → Taşıt (0)
 ```
 
-> ⚠️ **Not:** TEKNOFEST resmi örnek video dağıtım tarihi **10-28 Mart 2025**'tir. [Resmi repo](https://github.com/TEKNOFEST-YARISMALAR/havacilikta-yapay-zeka-yarismasi) takip edilmelidir.
+> ⚠️ **Not:** TEKNOFEST resmi örnek video dağıtım tarihi **10-28 Mart 2026**'tir. [Resmi repo](https://github.com/TEKNOFEST-YARISMALAR/havacilikta-yapay-zeka-yarismasi) takip edilmelidir.
 
 ---
 
@@ -305,6 +305,6 @@ MIT License — Detaylar için [LICENSE](LICENSE) dosyasına bakın.
 
 <div align="center">
 
-**TEKNOFEST 2025 Havacılıkta Yapay Zeka Yarışması** için geliştirilmiştir 🇹🇷
+**TEKNOFEST 2026 Havacılıkta Yapay Zeka Yarışması** için geliştirilmiştir 🇹🇷
 
 </div>
