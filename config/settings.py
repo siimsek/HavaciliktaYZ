@@ -235,6 +235,13 @@ class Settings:
     # Debug görsel kaydetme aralığı (her N karede diske yaz)
     DEBUG_SAVE_INTERVAL: int = 50
 
+    # Taşıt hareketlilik kestirimi (movement_status) parametreleri
+    MOVEMENT_WINDOW_FRAMES: int = 24
+    MOVEMENT_MIN_HISTORY: int = 6
+    MOVEMENT_THRESHOLD_PX: float = 12.0
+    MOVEMENT_MATCH_DISTANCE_PX: float = 80.0
+    MOVEMENT_MAX_MISSED_FRAMES: int = 8
+
     # =========================================================================
     #  YARIŞMA LİMİTLERİ (Şartname)
     # =========================================================================

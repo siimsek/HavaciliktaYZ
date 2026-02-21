@@ -274,6 +274,7 @@ class NetworkManager:
             {
                 "cls": obj["cls"],
                 "landing_status": obj["landing_status"],
+                "movement_status": obj.get("movement_status", "-1"),
                 "top_left_x": obj["top_left_x"],
                 "top_left_y": obj["top_left_y"],
                 "bottom_right_x": obj["bottom_right_x"],

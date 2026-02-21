@@ -49,6 +49,7 @@ from config.settings import Settings
 from src.utils import Logger, Visualizer
 from src.detection import ObjectDetector
 from src.localization import VisualOdometry
+from src.movement import MovementEstimator
 
 
 # =============================================================================
@@ -164,6 +165,7 @@ def run_simulation(
 
         detector = ObjectDetector()
         odometry = VisualOdometry()
+        movement = MovementEstimator()
         fps_counter = FPSCounter(report_interval=Settings.FPS_REPORT_INTERVAL)
 
         visualizer = Visualizer()
@@ -214,6 +216,7 @@ def run_simulation(
 
                 # ---- NESNE TESPİTİ (Görev 1) ----
                 detected_objects = detector.detect(frame)
+                detected_objects = movement.annotate(detected_objects)
 
                 # ---- KONUM KESTİRİMİ (Görev 2) ----
                 position = odometry.update(frame, server_data)
@@ -331,6 +334,7 @@ def run_competition(log: Logger) -> None:
         network = NetworkManager(simulation_mode=False)
         detector = ObjectDetector()
         odometry = VisualOdometry()
+        movement = MovementEstimator()
         fps_counter = FPSCounter(report_interval=Settings.FPS_REPORT_INTERVAL)
 
         visualizer: Optional[Visualizer] = None
@@ -404,6 +408,7 @@ def run_competition(log: Logger) -> None:
 
                 # ---- 3) NESNE TESPİTİ (GÖREV 1) ----
                 detected_objects = detector.detect(frame)
+                detected_objects = movement.annotate(detected_objects)
 
                 # ---- 4) KONUM KESTİRİMİ (GÖREV 2) ----
                 position = odometry.update(frame, frame_data)
