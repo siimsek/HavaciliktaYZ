@@ -21,8 +21,11 @@
 - [Kurulum](#-kurulum)
 - [Kullanım](#-kullanım)
 - [Yapılandırma](#-yapılandırma)
+- [Görev 3 Parametre Dosyası](#-görev-3-parametre-dosyası)
+- [Deterministiklik Sözleşmesi](#-deterministiklik-sözleşmesi)
 - [Dosya Yapısı](#-dosya-yapısı)
 - [Yarışma Kuralları](#-yarışma-kuralları)
+- [Görev 1 Temporal Karar Mantığı](#-görev-1-temporal-karar-mantığı)
 - [Eğitim ve Test Veri Setleri](#-eğitim-ve-test-veri-setleri)
 
 ---
@@ -202,6 +205,61 @@ Tüm ayarlar [`config/settings.py`](config/settings.py) içinde merkezi olarak y
 
 ---
 
+## 🎛️ Görev 3 Parametre Dosyası
+
+Görev 3 (dinamik referans obje tespiti) için tüm kritik eşikler tek bir dosyada tanımlanır:
+
+- Dosya: [`config/task3_params.yaml`](config/task3_params.yaml)
+- Amaç: `T_confirm`, `T_fallback`, `N`, `grid stride` değerlerini merkezi ve denetlenebilir tutmak
+
+### Parametreler
+
+| Parametre | Dosya Anahtarı | Açıklama |
+|-----------|----------------|----------|
+| `T_confirm` | `t_confirm` | Stage-2 aday doğrulama minimum benzerlik eşiği |
+| `T_fallback` | `t_fallback` | Stage-3 fallback sweep kabul eşiği |
+| `N` | `n_fallback_interval` | Stage-3 fallback'in her kaç frame'de bir tetikleneceği |
+| `grid stride` | `grid_stride` | Stage-3 grid/sliding-window tarama adımı (piksel) |
+
+### Örnek İçerik
+
+```yaml
+t_confirm: 0.72
+t_fallback: 0.66
+n_fallback_interval: 5
+grid_stride: 32
+```
+
+Not: Bu değerler çalışma sırasında dinamik değiştirilmemelidir; deterministik ve tekrarlanabilir karar için oturum başında sabitlenmelidir.
+
+---
+
+## 🔒 Deterministiklik Sözleşmesi
+
+Sistem çıktılarının tekrarlanabilir olması için aşağıdaki kurallar zorunludur:
+
+1. **Seed Sabitleme (numpy/torch/random):**
+   - Tüm çalıştırmalarda aynı seed kullanılmalıdır.
+   - Öneri: `numpy`, `torch`, `random` için tek noktadan seed ataması yapılmalı.
+
+2. **Model Eval Mode:**
+   - İnference öncesi tüm modeller `eval` modunda çalıştırılmalıdır.
+   - Dropout ve BatchNorm gibi katmanların eğitim davranışı kapatılmalıdır.
+
+3. **Sabit Sürüm Pinleme:**
+   - `torch`, `torchvision`, `ultralytics`, CUDA ve cuDNN sürümleri pinlenmelidir.
+   - Üretim ortamında sürüm kayması engellenmeli, aynı bağımlılık seti korunmalıdır.
+
+4. **JSON Sırası ve Kararlı Serileştirme:**
+   - Çıktı JSON'ları kararlı anahtar sırası ile üretilmelidir (`sort_keys=True` veya sabit alan sırası).
+   - Sayısal formatlama ve alan sırası sürümler arasında değiştirilmemelidir.
+
+5. **Frame-Index Tabanlı Karar Kuralları:**
+   - Adaptasyonlar wall-clock süreye göre değil, frame index/pencere kuralına göre yapılmalıdır.
+   - Bu yaklaşım farklı donanımlarda aynı karar davranışını korur.
+
+---
+
 ## 📂 Dosya Yapısı
 
 ```
@@ -213,7 +271,8 @@ HavaciliktaYZ/
 │
 ├── config/
 │   ├── __init__.py
-│   └── settings.py         # Merkezi yapılandırma
+│   ├── settings.py         # Merkezi yapılandırma
+│   └── task3_params.yaml   # Görev 3 eşik ve tarama parametreleri
 │
 ├── src/
 │   ├── __init__.py
@@ -253,6 +312,34 @@ HavaciliktaYZ/
 - **Uygun (1):** Alan tamamen kadraj içinde VE üzerinde hiçbir nesne yok
 - **Uygun Değil (0):** Alan kısmen kadraj dışı VEYA üzerinde nesne var
 - Bisiklet/motosiklet sürücüleri "insan" değil, taşıtla birlikte "taşıt" olarak etiketlenir
+
+## ⏱️ Görev 1 Temporal Karar Mantığı
+
+Görev 1 kararları tek frame üzerinden verilmez. Tüm hareket ve iniş uygunluk çıktıları pencere (window) tabanlı temporal birikim ile üretilir.
+
+### 1) Window (Pencere) Yapısı
+
+- Her hedef nesne/alan için son `W` frame tutulur (örnek: `W=24`).
+- `W` değeri sabit konfigürasyon parametresidir; çalışma sırasında dinamik değiştirilmez.
+- Karar, tek bir frame yerine pencere içindeki kanıtların birleşimi ile verilir.
+
+### 2) Decay (Ağırlıklandırma)
+
+- Yakın frame'lere daha yüksek, eski frame'lere daha düşük ağırlık verilir.
+- Örnek ağırlık şeması: üstel veya doğrusal decay (`w_t`) ve normalize toplam.
+- Amaç kısa süreli gürültü/yanlış tespitten etkilenmeden stabil karar üretmektir.
+
+### 3) Threshold (Karar Eşiği)
+
+- Pencere boyunca biriken temporal skor `S` hesaplanır.
+- `S >= T_move` ise taşıt için `movement_status=1`, aksi halde `movement_status=0`.
+- UAP/UAİ için `S >= T_land` ise `landing_status=1`, aksi halde `landing_status=0`.
+- `T_move` ve `T_land` kalibrasyon testleri ile sabitlenir.
+
+### 4) Tek-Frame Karar Yasağı
+
+- Tek frame ile doğrudan `movement_status` veya `landing_status` kararı verilmez.
+- Anlık kararlar yalnızca geçici kanıt olarak temporal havuza yazılır; nihai karar pencere sonunda üretilir.
 
 ### Teknik Kısıtlamalar
 

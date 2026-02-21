@@ -1,0 +1,14 @@
+# Task-3 dynamic reference detection parameters
+# Keep values fixed during a run for deterministic behavior.
+
+t_confirm: 0.72
+# Minimum similarity score to confirm a candidate in Stage-2.
+
+t_fallback: 0.66
+# Minimum similarity score for Stage-3 fallback sweep acceptance.
+
+n_fallback_interval: 5
+# Run Stage-3 fallback sweep every N frames when no strong candidate exists.
+
+grid_stride: 32
+# Pixel stride for fallback grid/sliding-window scan.

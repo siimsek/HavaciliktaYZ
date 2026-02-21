@@ -16,3 +16,15 @@
 
 ## 0.0.04 - 2026-02-21
 - Updated all year references in `README.md` from 2025 to 2026 to align project documentation with TEKNOFEST 2026 scope.
+
+## 0.0.05 - 2026-02-21
+- Added a new "Deterministiklik Sözleşmesi" section to `README.md` with explicit rules for fixed seeds, model eval mode, version pinning, and stable JSON key ordering.
+- Added the section link to README table of contents for easier navigation.
+
+## 0.0.06 - 2026-02-21
+- Added a dedicated "Görev 1 Temporal Karar Mantığı" section to `README.md` documenting window, decay, and threshold based decision flow.
+- Explicitly prohibited single-frame final decisions for `movement_status` and `landing_status` in documentation.
+
+## 0.0.07 - 2026-02-21
+- Added `config/task3_params.yaml` as the explicit Task-3 parameter file for `T_confirm`, `T_fallback`, `N`, and `grid stride`.
+- Documented the Task-3 parameter contract and field mapping in `README.md`.
