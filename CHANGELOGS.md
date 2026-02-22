@@ -51,3 +51,6 @@
 - CI now performs syntax-focused `flake8` checks (`E9,F63,F7,F82`) to fail fast on parse/name-critical issues.
 - Added `python -m compileall -q .` compile pass to detect syntax regressions early without executing runtime code.
 - Kept pipeline dependency-light (no heavy ML package install) to reduce CI duration and avoid false negatives from GPU stack setup.
+
+## 0.0.13 - 2026-02-22
+- Added `CODEBASE_STATE_REPORT.md` with a structured, timestamped technical audit of current architecture, implementation status, determinism profile, performance characteristics, and competition compliance risks.
