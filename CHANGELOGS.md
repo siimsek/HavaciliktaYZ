@@ -28,3 +28,8 @@
 ## 0.0.07 - 2026-02-21
 - Added `config/task3_params.yaml` as the explicit Task-3 parameter file for `T_confirm`, `T_fallback`, `N`, and `grid stride`.
 - Documented the Task-3 parameter contract and field mapping in `README.md`.
+
+## 0.0.08 - 2026-02-22
+- Added explicit memory cleanup in `src/movement.py` by clearing track history before stale track deletion.
+- Hardened incoming frame validation in `src/network.py` with defensive type sanitization for `gps_health`, `translation_*`, and `altitude` fields.
+- Added safe fallbacks for null/unknown/invalid telemetry values to improve runtime resilience under noisy server payloads.

@@ -103,6 +103,7 @@ class MovementEstimator:
                 if track.missed > Settings.MOVEMENT_MAX_MISSED_FRAMES:
                     to_delete.append(track_id)
         for track_id in to_delete:
+            self._tracks[track_id].history.clear()  # Belleği temizle
             del self._tracks[track_id]
 
     def _create_track(self, center: Tuple[float, float]) -> int:

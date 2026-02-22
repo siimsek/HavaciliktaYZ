@@ -390,7 +390,8 @@ class NetworkManager:
 
     def _validate_frame_data(self, data: Dict[str, Any]) -> bool:
         """
-        Sunucudan gelen kare verisinin zorunlu alanlarını kontrol eder.
+        Sunucudan gelen kare verisinin zorunlu alanlarını kontrol eder
+        ve tipleri güvenli hale getirir (Sanitization).
 
         Args:
             data: Sunucudan gelen JSON verisi.
@@ -398,11 +399,40 @@ class NetworkManager:
         Returns:
             Veri geçerli ise True.
         """
-        required_fields = ["frame_id"]
-        for field in required_fields:
-            if field not in data:
-                self.log.warn(f"Eksik alan: '{field}' kare verisinde bulunamadı")
-                return False
+        if not isinstance(data, dict):
+            self.log.warn("Kare verisi sözlük (dict) formatında değil.")
+            return False
+
+        if "frame_id" not in data or data["frame_id"] is None:
+            self.log.warn("Eksik alan: 'frame_id' kare verisinde bulunamadı")
+            return False
+
+        # --- Sanitization (Tip Güvenliği) ---
+        
+        # 1. gps_health kontrolü (0 veya 1 olmalı)
+        health_val = data.get("gps_health", 0)
+        try:
+            if health_val is None or str(health_val).strip().lower() in ["unknown", "none", "null", ""]:
+                data["gps_health"] = 0
+            else:
+                data["gps_health"] = int(float(health_val))
+        except (ValueError, TypeError):
+            self.log.warn(f"Bozuk gps_health değeri alındı: '{health_val}', 0 kabul ediliyor.")
+            data["gps_health"] = 0
+
+        # 2. translation değerleri kontrolü (Varsa float olmalı)
+        for key in ["translation_x", "translation_y", "translation_z", "altitude"]:
+            if key in data:
+                val = data.get(key)
+                try:
+                    if val is None or str(val).strip().lower() in ["unknown", "none", "null", ""]:
+                        data[key] = 0.0
+                    else:
+                        data[key] = float(val)
+                except (ValueError, TypeError):
+                    self.log.warn(f"Bozuk {key} değeri alındı: '{val}', 0.0 kabul ediliyor.")
+                    data[key] = 0.0
+
         return True
 
     @staticmethod
