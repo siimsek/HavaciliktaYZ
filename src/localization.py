@@ -144,6 +144,14 @@ class VisualOdometry:
         self._max_displacement_per_frame: float = 5.0
 
         self._was_gps_healthy: bool = False
+        self._mode: str = "GPS_FUSED"
+        self._last_update_monotonic: Optional[float] = None
+        self._runtime_meta: Dict[str, object] = {
+            "update_mode": "init",
+            "state_source": "none",
+            "quality_flag": "unknown",
+            "reason_code": "startup",
+        }
 
         self._last_of_position: Dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
 
@@ -180,6 +188,9 @@ class VisualOdometry:
         server_data: Dict,
     ) -> Dict[str, float]:
         gps_health = server_data.get("gps_health", 0)
+        now_mono = time.monotonic()
+        if self._last_update_monotonic is None:
+            self._last_update_monotonic = now_mono
 
         if isinstance(frame_ctx, np.ndarray):
             gray = cv2.cvtColor(frame_ctx, cv2.COLOR_BGR2GRAY)
@@ -191,6 +202,13 @@ class VisualOdometry:
             self._update_from_gps(server_data)
             self._prev_gray = gray
             self._was_gps_healthy = True
+            self._mode = "GPS_FUSED"
+            self._runtime_meta = {
+                "update_mode": "corrected",
+                "state_source": "gps",
+                "quality_flag": "nominal",
+                "reason_code": "gps_healthy",
+            }
 
         else:
             # GPS kapalı: optik akış. İlk geçişte referans kare oluştur
@@ -205,15 +223,33 @@ class VisualOdometry:
                 self.log.info("GPS → Optik Akış geçişi — referans kare oluşturuldu, EMA resetlendi.")
 
             if self._prev_gray is not None and self._prev_points is not None:
-                self._update_from_optical_flow(gray, server_data)
+                updated = self._update_from_optical_flow(gray, server_data)
+                if updated:
+                    self._mode = "VISION_ONLY"
+                    self._runtime_meta = {
+                        "update_mode": "corrected",
+                        "state_source": "optical_flow",
+                        "quality_flag": "nominal",
+                        "reason_code": "gps_unhealthy_optical_flow",
+                    }
+                else:
+                    self.predict_without_measurement(
+                        reason_code="optical_flow_unavailable",
+                        gps_health=0,
+                    )
             else:
                 self.log.warn(
                     "GPS mevcut değil ve henüz referans kare oluşmadı — "
                     "GPS yok, referans kare henüz oluşmadı — pozisyon (0,0,0) korunuyor."
                 )
                 self._update_reference_frame(gray)
+                self.predict_without_measurement(
+                    reason_code="missing_reference_frame",
+                    gps_health=0,
+                )
 
         self._latency_comp.update_velocity(self.position)
+        self._last_update_monotonic = now_mono
         return self.get_position()
 
     def _update_from_gps(self, server_data: Dict) -> None:
@@ -242,11 +278,11 @@ class VisualOdometry:
         self,
         gray: np.ndarray,
         server_data: Dict,
-    ) -> None:
+    ) -> bool:
         if self._prev_points is None or len(self._prev_points) < 10:
             self._update_reference_frame(gray)
             self.log.warn("Yetersiz köşe noktası — yeniden tespit ediliyor")
-            return
+            return False
 
         next_points, status, err = cv2.calcOpticalFlowPyrLK(
             self._prev_gray, gray, self._prev_points, None, **self._lk_params
@@ -255,12 +291,12 @@ class VisualOdometry:
         if next_points is None or status is None:
             self._update_reference_frame(gray)
             self.log.warn("Optik Akış başarısız — referans kare yenileniyor")
-            return
+            return False
 
         mask = status.flatten() == 1
 
         if self._prev_points is None:
-            return
+            return False
 
         good_old = self._prev_points[mask].reshape(-1, 2)
         good_new = next_points[mask].reshape(-1, 2)
@@ -268,7 +304,7 @@ class VisualOdometry:
         if len(good_new) < 5:
             self._update_reference_frame(gray)
             self.log.warn("Başarılı takip sayısı az — referans yenileniyor")
-            return
+            return False
 
         dx_pixels = float(np.median(good_new[:, 0] - good_old[:, 0]))
         dy_pixels = float(np.median(good_new[:, 1] - good_old[:, 1]))
@@ -333,6 +369,7 @@ class VisualOdometry:
         else:
             self._prev_gray = gray.copy()
             self._prev_points = good_new.reshape(-1, 1, 2)
+        return True
 
     def _pixel_to_meter(
         self,
@@ -387,6 +424,50 @@ class VisualOdometry:
             max_dt_sec=max_dt_sec,
             max_delta_m=max_delta_m,
         )
+
+    def predict_without_measurement(
+        self,
+        reason_code: str,
+        gps_health: int = 0,
+    ) -> Dict[str, float]:
+        now_mono = time.monotonic()
+        if self._last_update_monotonic is None:
+            dt_sec = 0.0
+        else:
+            dt_sec = max(0.0, now_mono - self._last_update_monotonic)
+
+        max_dt_sec = max(0.0, float(Settings.LATENCY_COMP_MAX_MS) / 1000.0)
+        max_delta_m = max(0.0, float(self._max_displacement_per_frame))
+        projected_position, applied_delta_m, used_dt_sec = self.project_position_with_latency(
+            position=self.position,
+            dt_sec=dt_sec,
+            max_dt_sec=max_dt_sec,
+            max_delta_m=max_delta_m,
+        )
+
+        self.position = dict(projected_position)
+        self._last_of_position = dict(projected_position)
+        self._mode = "DEGRADED"
+        self._runtime_meta = {
+            "update_mode": "predict-only",
+            "state_source": "vision_predict",
+            "quality_flag": "degraded",
+            "reason_code": reason_code,
+            "gps_health": int(gps_health),
+            "predict_dt_sec": round(used_dt_sec, 6),
+            "predict_delta_m": round(applied_delta_m, 6),
+        }
+        self.log.debug(
+            "event=predict_only_update "
+            f"reason_code={reason_code} dt_sec={used_dt_sec:.4f} "
+            f"delta_m={applied_delta_m:.4f}"
+        )
+        self._latency_comp.update_velocity(self.position, sample_monotonic=now_mono)
+        self._last_update_monotonic = now_mono
+        return self.get_position()
+
+    def get_runtime_meta(self) -> Dict[str, object]:
+        return dict(self._runtime_meta)
 
     def reset(self) -> None:
         self.position = {"x": 0.0, "y": 0.0, "z": 0.0}

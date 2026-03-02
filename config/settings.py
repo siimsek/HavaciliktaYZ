@@ -151,7 +151,7 @@ class Settings:
     LOG_MAX_FILES: int = 2000
     DETERMINISM_SEED: int = 42
     DETERMINISM_CPU_THREADS: int = 1
-    MOTION_FIELD_NAME: str = "movement_status"
+    MOTION_FIELD_NAME: str = "motion_status"
     PAYLOAD_CLS_AS_INT: bool = False
 
     # Hareket (movement_status)

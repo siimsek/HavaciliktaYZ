@@ -53,6 +53,14 @@ except Exception:  # pragma: no cover
 from src.send_state import apply_send_result_status
 from src.resilience import ResilienceState, SessionResilienceController
 from src.runtime_profile import apply_runtime_profile
+from src.competition_contract import (
+    DataContractError,
+    ErrorDecision,
+    ErrorPolicy,
+    FatalSystemError,
+    RecoverableIOError,
+)
+from src.payload_schema import CompetitionPayloadSchema
 from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_old_logs
 from main import run_simulation
 
@@ -619,6 +627,65 @@ class TestNetworkPayloadGuard(unittest.TestCase):
         self.assertEqual(status, SendResultStatus.RETRYABLE_FAILURE)
 
 
+class TestCompetitionPayloadSchema(unittest.TestCase):
+    def test_legacy_motion_alias_is_normalized_to_canonical(self):
+        obj = {
+            "cls": "0",
+            "landing_status": "1",
+            "movement_status": "0",
+            "top_left_x": 1,
+            "top_left_y": 2,
+            "bottom_right_x": 20,
+            "bottom_right_y": 30,
+        }
+        out, alias_count = CompetitionPayloadSchema.canonicalize_objects([obj], frame_shape=(100, 100))
+        self.assertEqual(alias_count, 1)
+        self.assertEqual(len(out), 1)
+        self.assertIn("motion_status", out[0])
+        self.assertNotIn("movement_status", out[0])
+        self.assertEqual(out[0]["motion_status"], 0)
+
+    def test_settings_self_check_requires_canonical_motion_field(self):
+        old = Settings.MOTION_FIELD_NAME
+        try:
+            Settings.MOTION_FIELD_NAME = "movement_status"
+            with self.assertRaises(DataContractError):
+                CompetitionPayloadSchema.self_check()
+        finally:
+            Settings.MOTION_FIELD_NAME = old
+
+
+class TestErrorPolicy(unittest.TestCase):
+    def test_recoverable_error_then_degrade_after_budget(self):
+        p = ErrorPolicy(retry_budget=1, degrade_budget=3)
+        self.assertEqual(
+            p.decide_on_error(RecoverableIOError("x")),
+            ErrorDecision.RETRY,
+        )
+        self.assertEqual(
+            p.decide_on_error(RecoverableIOError("x2")),
+            ErrorDecision.DEGRADE,
+        )
+
+    def test_data_contract_error_stops_after_degrade_budget(self):
+        p = ErrorPolicy(retry_budget=5, degrade_budget=1)
+        self.assertEqual(
+            p.decide_on_error(DataContractError("bad")),
+            ErrorDecision.DEGRADE,
+        )
+        self.assertEqual(
+            p.decide_on_error(DataContractError("bad2")),
+            ErrorDecision.STOP,
+        )
+
+    def test_fatal_error_is_always_stop(self):
+        p = ErrorPolicy()
+        self.assertEqual(
+            p.decide_on_error(FatalSystemError("fatal")),
+            ErrorDecision.STOP,
+        )
+
+
 class _DummyDetector:
     detect_calls = 0
 
@@ -1026,3 +1093,27 @@ class TestLatencyCompensatorHelper(unittest.TestCase):
 
         self.assertAlmostEqual(projected["x"], 2.2, places=6)
         self.assertAlmostEqual(delta_m, 0.2, places=6)
+
+
+class TestVisualOdometryPredictOnly(unittest.TestCase):
+    def test_predict_without_measurement_updates_runtime_meta(self):
+        from src.localization import VisualOdometry
+
+        odom = VisualOdometry()
+        odom.position = {"x": 5.0, "y": 0.0, "z": 1.0}
+        odom._last_update_monotonic = 10.0  # test bootstrap
+
+        with patch("time.monotonic", return_value=10.1):
+            pos = odom.predict_without_measurement(
+                reason_code="frame_download_failed",
+                gps_health=0,
+            )
+
+        self.assertIn("x", pos)
+        self.assertIn("y", pos)
+        self.assertIn("z", pos)
+        meta = odom.get_runtime_meta()
+        self.assertEqual(meta["update_mode"], "predict-only")
+        self.assertEqual(meta["state_source"], "vision_predict")
+        self.assertEqual(meta["quality_flag"], "degraded")
+        self.assertEqual(meta["reason_code"], "frame_download_failed")

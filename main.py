@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
+import requests
 import torch
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +22,13 @@ from config.settings import Settings  # noqa: E402
 from src.detection import ObjectDetector  # noqa: E402
 from src.localization import VisualOdometry  # noqa: E402
 from src.movement import MovementEstimator  # noqa: E402
+from src.competition_contract import (  # noqa: E402
+    DataContractError,
+    ErrorDecision,
+    ErrorPolicy,
+    FatalSystemError,
+    RecoverableIOError,
+)
 from src.resilience import SessionResilienceController  # noqa: E402
 from src.runtime_profile import apply_runtime_profile  # noqa: E402
 from src.send_state import apply_send_result_status  # noqa: E402
@@ -371,6 +379,12 @@ def run_competition(log: Logger) -> None:
     if not network.start_session():
         log.error("Server session start failed")
         return
+    if hasattr(network, "assert_contract_ready"):
+        try:
+            network.assert_contract_ready()
+        except DataContractError as exc:
+            log.error(f"Payload schema self-check failed: {exc}")
+            return
 
     server_refs = network.get_task3_references()
     if image_matcher is not None and server_refs:
@@ -407,6 +421,10 @@ def run_competition(log: Logger) -> None:
     consecutive_duplicate_frames = 0
     CONSECUTIVE_DUPLICATE_ABORT_THRESHOLD = 5
     resilience = SessionResilienceController(log=log)
+    error_policy = ErrorPolicy(
+        retry_budget=max(5, Settings.MAX_RETRIES * 2),
+        degrade_budget=3,
+    )
 
     kpi_counters: Dict[str, int] = {
         "send_ok": 0,
@@ -427,6 +445,10 @@ def run_competition(log: Logger) -> None:
         "compensation_sum_delta_m": 0.0,
         "compensation_avg_delta_m": 0.0,
         "compensation_max_delta_m": 0.0,
+        "error_decision_retry": 0,
+        "error_decision_degrade": 0,
+        "error_decision_stop": 0,
+        "error_unknown_count": 0,
     }
     pending_result: Optional[Dict] = None
 
@@ -563,11 +585,53 @@ def run_competition(log: Logger) -> None:
             except KeyboardInterrupt:
                 log.warn("Interrupted by user")
                 break
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                decision = error_policy.decide_on_error(
+                    RecoverableIOError(str(exc))
+                )
+                log.warn(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
+                if decision == ErrorDecision.RETRY:
+                    kpi_counters["error_decision_retry"] += 1
+                    time.sleep(0.2)
+                    continue
+                if decision == ErrorDecision.DEGRADE:
+                    kpi_counters["error_decision_degrade"] += 1
+                    time.sleep(0.2)
+                    continue
+                kpi_counters["error_decision_stop"] += 1
+                break
+            except (ValueError, KeyError, TypeError) as exc:
+                decision = error_policy.decide_on_error(
+                    DataContractError(str(exc))
+                )
+                log.error(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
+                if decision == ErrorDecision.DEGRADE:
+                    kpi_counters["error_decision_degrade"] += 1
+                    time.sleep(0.2)
+                    continue
+                kpi_counters["error_decision_stop"] += 1
+                break
+            except (RuntimeError, OSError, MemoryError) as exc:
+                decision = error_policy.decide_on_error(
+                    FatalSystemError(str(exc))
+                )
+                log.error(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
+                kpi_counters["error_decision_stop"] += 1
+                break
             except Exception as exc:
-                log.error(f"Runtime error: {exc}")
+                decision = error_policy.decide_on_error(exc)
+                kpi_counters["error_unknown_count"] += 1
+                log.error(
+                    f"event=error_decision decision={decision.value} type={type(exc).__name__} error={exc}"
+                )
                 if "pytest" in sys.modules and getattr(sys, "last_type", None) is None:
                     raise
-                time.sleep(0.5)
+                if decision == ErrorDecision.DEGRADE:
+                    kpi_counters["error_decision_degrade"] += 1
+                    time.sleep(0.2)
+                    continue
+                kpi_counters["error_decision_stop"] += 1
+                break
 
     finally:
         resilience_stats = resilience.finalize()
@@ -927,9 +991,25 @@ def _fetch_competition_step(
     if use_fallback:
         gps_health = int(float(frame_data.get("gps_health", 0)))
         if gps_health == 0:
-            last_position = odometry.get_last_of_position()
+            if hasattr(odometry, "predict_without_measurement"):
+                last_position = odometry.predict_without_measurement(
+                    reason_code="frame_download_failed",
+                    gps_health=0,
+                )
+            else:
+                last_position = odometry.get_last_of_position()
         else:
             last_position = odometry.get_position()
+        runtime_meta = (
+            odometry.get_runtime_meta()
+            if hasattr(odometry, "get_runtime_meta")
+            else {
+                "update_mode": "fallback",
+                "state_source": "last_known",
+                "quality_flag": "degraded" if gps_health == 0 else "nominal",
+                "reason_code": "frame_download_failed",
+            }
+        )
         pending_result = {
             "frame_id": frame_id, "frame_data": frame_data, "detected_objects": [],
             "frame": None, "position": last_position,
@@ -939,6 +1019,7 @@ def _fetch_competition_step(
                 "translation_y": last_position["y"],
                 "translation_z": last_position["z"],
             },
+            "localization_runtime": runtime_meta,
             "base_position": dict(last_position),
             "frame_fetch_monotonic": frame_fetch_monotonic,
             "frame_shape": None, "detected_undefined_objects": [],
@@ -952,6 +1033,16 @@ def _fetch_competition_step(
         if image_matcher is not None:
             undefined_objects = image_matcher.match(frame)
         position = odometry.update(frame_ctx, frame_data)
+        runtime_meta = (
+            odometry.get_runtime_meta()
+            if hasattr(odometry, "get_runtime_meta")
+            else {
+                "update_mode": "corrected",
+                "state_source": "unknown",
+                "quality_flag": "nominal",
+                "reason_code": "legacy_odometry",
+            }
+        )
         pending_result = {
             "frame_id": frame_id, "frame_data": frame_data, "detected_objects": detected_objects,
             "frame": frame, "position": position, "degraded": degrade_mode,
@@ -961,6 +1052,7 @@ def _fetch_competition_step(
                 "translation_y": position["y"],
                 "translation_z": position["z"],
             },
+            "localization_runtime": runtime_meta,
             "base_position": dict(position),
             "frame_fetch_monotonic": frame_fetch_monotonic,
             "frame_shape": frame.shape, "detected_undefined_objects": undefined_objects,
@@ -976,6 +1068,19 @@ def _submit_competition_step(
     consecutive_permanent_rejects: int, permanent_reject_abort_threshold: int,
 ):
     import time
+    required_keys = {
+        "frame_id",
+        "frame_data",
+        "detected_objects",
+        "detected_translation",
+        "frame_shape",
+    }
+    missing = required_keys - set(pending_result.keys())
+    if missing:
+        raise DataContractError(
+            f"pending_result missing keys: {sorted(list(missing))}"
+        )
+
     frame_id = pending_result["frame_id"]
     frame_data = pending_result["frame_data"]
     detected_objects = pending_result["detected_objects"]

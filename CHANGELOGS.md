@@ -223,3 +223,11 @@
 - Added compensation KPIs (`compensation_apply_count`, `compensation_avg_delta_m`, `compensation_max_delta_m`) to competition summary logs.
 - Added unit tests in `tests/test_all.py` for GPS gating, runtime dt usage (non-hardcoded), clamp behavior, and feature-off backward compatibility.
 - Updated README configuration section with latency compensation usage notes.
+
+## 0.0.22 - 2026-03-02
+- Closed K1 payload contract risk by introducing canonical schema utilities (`src/payload_schema.py`) and enforcing `motion_status` as the only outbound field while still normalizing legacy `movement_status` on input.
+- Added startup payload self-check (`NetworkManager.assert_contract_ready`) and switched `MOTION_FIELD_NAME` default to `motion_status` in `config/settings.py`.
+- Closed K2 GPS fallback risk by extending `VisualOdometry` with deterministic mode/meta tracking and `predict_without_measurement` flow for GPS unhealthy / missing-measurement paths.
+- Updated competition fallback in `main.py` to use predict-only localization updates instead of replaying last pose when frame download fails under `gps_health=0`.
+- Closed K3 error-handling risk by adding typed competition error taxonomy + decision policy (`src/competition_contract.py`) and integrating decision-driven runtime handling (`RETRY/DEGRADE/STOP`) in the competition loop.
+- Added unit coverage in `tests/test_all.py` for payload schema canonicalization, error policy mapping, and predict-only odometry metadata.

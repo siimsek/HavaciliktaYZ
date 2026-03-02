@@ -13,6 +13,7 @@ import numpy as np
 import requests
 
 from config.settings import Settings
+from src.payload_schema import CompetitionPayloadSchema
 from src.utils import Logger, log_json_to_disk
 
 
@@ -75,6 +76,9 @@ class NetworkManager:
 
     def get_task3_references(self) -> list:
         return list(self._task3_references)
+
+    def assert_contract_ready(self) -> None:
+        CompetitionPayloadSchema.self_check()
 
     def start_session(self) -> bool:
         if self.simulation_mode:
@@ -433,41 +437,10 @@ class NetworkManager:
             frame_h = int(frame_shape[0])
             frame_w = int(frame_shape[1])
 
-        clean_objects: List[Dict[str, Any]] = []
-        for obj in detected_objects:
-            cls = str(obj.get("cls", ""))
-            landing = str(obj.get("landing_status", "-1"))
-            motion = str(obj.get(Settings.MOTION_FIELD_NAME, obj.get("motion_status", "-1")))
-            if cls not in {"0", "1", "2", "3"}:
-                continue
-            if landing not in {"-1", "0", "1"}:
-                landing = "-1"
-            if motion not in {"-1", "0", "1"}:
-                motion = "-1"
-
-            x1 = NetworkManager._safe_int(obj.get("top_left_x", 0))
-            y1 = NetworkManager._safe_int(obj.get("top_left_y", 0))
-            x2 = NetworkManager._safe_int(obj.get("bottom_right_x", 0))
-            y2 = NetworkManager._safe_int(obj.get("bottom_right_y", 0))
-
-            if frame_w is not None and frame_h is not None:
-                x1, y1, x2, y2 = NetworkManager._clamp_bbox(
-                    x1, y1, x2, y2, frame_w=frame_w, frame_h=frame_h
-                )
-
-            _cls_val = int(cls) if Settings.PAYLOAD_CLS_AS_INT else str(cls)
-            clean_objects.append(
-                {
-                    "cls": _cls_val,
-                    "landing_status": int(landing),
-                    Settings.MOTION_FIELD_NAME: int(motion),
-                    "top_left_x": int(x1),
-                    "top_left_y": int(y1),
-                    "bottom_right_x": int(x2),
-                    "bottom_right_y": int(y2),
-                    "_confidence": NetworkManager._safe_float(obj.get("confidence", 0.0)),
-                }
-            )
+        clean_objects, alias_count = CompetitionPayloadSchema.canonicalize_objects(
+            detected_objects,
+            frame_shape=(frame_h, frame_w) if frame_h is not None and frame_w is not None else None,
+        )
 
         tx = NetworkManager._safe_float(detected_translation.get("translation_x", 0.0))
         ty = NetworkManager._safe_float(detected_translation.get("translation_y", 0.0))
@@ -477,7 +450,7 @@ class NetworkManager:
         payload_user = frame_data.get("user", Settings.TEAM_NAME)
         payload_frame = frame_data.get("url", frame_data.get("frame", frame_id))
 
-        return {
+        payload = {
             "id": payload_id,
             "user": payload_user,
             "frame": payload_frame,
@@ -491,6 +464,12 @@ class NetworkManager:
             ],
             "detected_undefined_objects": detected_undefined_objects or [],
         }
+        if alias_count > 0:
+            Logger("Network").warn(
+                f"event=payload_alias_used alias_field={CompetitionPayloadSchema.LEGACY_MOTION_FIELD} "
+                f"count={alias_count}"
+            )
+        return payload
 
     def _get_simulation_frame(self) -> Dict[str, Any]:
         frame_id = self._frame_counter
@@ -589,15 +568,9 @@ class NetworkManager:
         frame_shape: Optional[tuple],
         frame_id: Any,
     ) -> Tuple[Dict[str, Any], bool, bool]:
-        required_fields = {
-            "id",
-            "user",
-            "frame",
-            "detected_objects",
-            "detected_translations",
-            "detected_undefined_objects",
-        }
-        if not isinstance(payload, dict) or not required_fields.issubset(payload.keys()):
+        try:
+            CompetitionPayloadSchema.validate_top_level_payload(payload)
+        except Exception:
             self.log.error(
                 f"Frame {frame_id}: preflight reject (missing top-level fields), forcing safe fallback"
             )
@@ -633,43 +606,14 @@ class NetworkManager:
             frame_h = self._safe_int(frame_shape[0])
             frame_w = self._safe_int(frame_shape[1])
 
-        normalized_objects: List[Dict[str, Any]] = []
-        for obj in objects:
-            if not isinstance(obj, dict):
-                continue
-            cls = str(obj.get("cls", ""))
-            if cls not in {"0", "1", "2", "3"}:
-                continue
-
-            landing = str(obj.get("landing_status", "-1"))
-            if landing not in {"-1", "0", "1"}:
-                landing = "-1"
-
-            motion = str(obj.get(Settings.MOTION_FIELD_NAME, obj.get("motion_status", "-1")))
-            if motion not in {"-1", "0", "1"}:
-                motion = "-1"
-
-            x1 = self._safe_int(obj.get("top_left_x", 0))
-            y1 = self._safe_int(obj.get("top_left_y", 0))
-            x2 = self._safe_int(obj.get("bottom_right_x", 0))
-            y2 = self._safe_int(obj.get("bottom_right_y", 0))
-            if frame_w is not None and frame_h is not None:
-                x1, y1, x2, y2 = self._clamp_bbox(
-                    x1, y1, x2, y2, frame_w=frame_w, frame_h=frame_h
-                )
-
-            _cls_out = int(cls) if Settings.PAYLOAD_CLS_AS_INT else str(cls)
-            normalized_objects.append(
-                {
-                    "cls": _cls_out,
-                    "landing_status": landing,
-                    Settings.MOTION_FIELD_NAME: motion,
-                    "top_left_x": x1,
-                    "top_left_y": y1,
-                    "bottom_right_x": x2,
-                    "bottom_right_y": y2,
-                    "_confidence": self._safe_float(obj.get("_confidence", obj.get("confidence", 0.0))),
-                }
+        normalized_objects, alias_count = CompetitionPayloadSchema.canonicalize_objects(
+            objects,
+            frame_shape=(frame_h, frame_w) if frame_h is not None and frame_w is not None else None,
+        )
+        if alias_count > 0:
+            self.log.warn(
+                f"event=payload_alias_used alias_field={CompetitionPayloadSchema.LEGACY_MOTION_FIELD} "
+                f"count={alias_count} frame_id={frame_id}"
             )
 
         capped_objects, clip_stats = self._apply_object_caps(
@@ -682,7 +626,10 @@ class NetworkManager:
             {
                 "cls": obj["cls"],
                 "landing_status": obj["landing_status"],
-                Settings.MOTION_FIELD_NAME: obj.get(Settings.MOTION_FIELD_NAME, obj.get("motion_status", "-1")),
+                CompetitionPayloadSchema.CANONICAL_MOTION_FIELD: obj.get(
+                    CompetitionPayloadSchema.CANONICAL_MOTION_FIELD,
+                    -1,
+                ),
                 "top_left_x": obj["top_left_x"],
                 "top_left_y": obj["top_left_y"],
                 "bottom_right_x": obj["bottom_right_x"],
