@@ -71,6 +71,7 @@ class NetworkManager:
         }
         self._clip_ratio_window: Deque[int] = deque(maxlen=100)
         self._session_id: str = str(int(time.time()))
+        self._run_uuid: Optional[str] = None
         self._task3_references: list = []
 
     def get_task3_references(self) -> list:
@@ -876,7 +877,7 @@ class NetworkManager:
     def _build_idempotency_key(self, frame_key: str) -> str:
         prefix = str(getattr(Settings, "IDEMPOTENCY_KEY_PREFIX", "aia")).strip() or "aia"
         import uuid
-        if not hasattr(self, "_run_uuid"):
+        if self._run_uuid is None:
             self._run_uuid = uuid.uuid4().hex[:8]
         return f"{prefix}:{self._session_id}:{self._run_uuid}:{frame_key}"
 
