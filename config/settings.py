@@ -123,6 +123,10 @@ class Settings:
     BACKOFF_JITTER_RATIO: float = 0.25
     SEEN_FRAME_LRU_SIZE: int = 512
     IDEMPOTENCY_KEY_PREFIX: str = "aia"
+    # Yarışma odaklı ağ politikası: mutlak URL'lerde sadece BASE_URL host/port
+    # izinlidir. Ek host/port ihtiyacı olursa ALLOWED_HOSTS içine "host:port"
+    # formatında eklenebilir.
+    ALLOWED_HOSTS: tuple = ()
 
     # Circuit breaker
     CB_TRANSIENT_WINDOW_SEC: float = 30.0

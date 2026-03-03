@@ -6,6 +6,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Deque, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import math
 import cv2
@@ -81,6 +82,19 @@ class NetworkManager:
         }
         self._session_id: str = str(int(time.time()))
         self._task3_references: list = []
+        self._allowed_netlocs = self._build_allowed_netlocs()
+
+    def _build_allowed_netlocs(self) -> set:
+        base_netloc = urlparse(self.base_url).netloc.lower()
+        allowed_hosts = getattr(Settings, "ALLOWED_HOSTS", ()) or ()
+        normalized_hosts = {
+            str(host).strip().lower()
+            for host in allowed_hosts
+            if str(host).strip()
+        }
+        if base_netloc:
+            normalized_hosts.add(base_netloc)
+        return normalized_hosts
 
     def get_task3_references(self) -> list:
         return list(self._task3_references)
@@ -237,7 +251,23 @@ class NetworkManager:
             self.log.error("Frame URL is missing in frame metadata")
             return None
 
-        full_url = frame_url if str(frame_url).startswith("http") else f"{self.base_url}{frame_url}"
+        frame_url_str = str(frame_url).strip()
+        parsed_frame_url = urlparse(frame_url_str)
+
+        if parsed_frame_url.scheme in {"http", "https"}:
+            requested_netloc = parsed_frame_url.netloc.lower()
+            if requested_netloc not in self._allowed_netlocs:
+                self.log.error(
+                    "Frame URL host whitelist rejected: "
+                    f"{requested_netloc} (allowed={sorted(self._allowed_netlocs)})"
+                )
+                self.log.warn(
+                    "Image fetch blocked by network policy, degrade akışına düşülüyor"
+                )
+                return None
+            full_url = frame_url_str
+        else:
+            full_url = f"{self.base_url}{frame_url_str}"
 
         for attempt in range(1, Settings.MAX_RETRIES + 1):
             try:
