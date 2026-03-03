@@ -317,6 +317,29 @@ class TestImageMatcherIdIntegrity(unittest.TestCase):
         self.assertEqual(self.matcher.last_load_stats["duplicate"], 1)
         self.assertEqual(self.matcher.last_load_stats["quarantined"], 1)
 
+
+    def test_matcher_keeps_trusted_refs_and_quarantines_low_trust(self):
+        refs = [
+            {"object_id": 6, "image": np.zeros((16, 16, 3), dtype=np.uint8)},
+            {"object_id": 7, "image": np.ones((16, 16, 3), dtype=np.uint8)},
+        ]
+        self.matcher.load_references(refs)
+
+        def selective_match(ref, *_args, **_kwargs):
+            if ref.object_id == 6:
+                return (1.0, 1.0, 8.0, 8.0)
+            return None
+
+        self.matcher._reference_trust_scores[7] = 0.31
+        with patch.object(self.matcher, "_match_reference", side_effect=selective_match):
+            out = self.matcher.match(np.zeros((32, 32, 3), dtype=np.uint8))
+            out = self.matcher.match(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["object_id"], 6)
+        self.assertEqual(self.matcher.quarantined_references.get(7), "low_trust_after_mismatch")
+        self.assertLess(self.matcher.reference_trust_scores[7], 0.30)
+
     def test_match_output_never_contains_duplicate_id(self):
         refs = [
             {"object_id": 5, "image": np.zeros((16, 16, 3), dtype=np.uint8)},

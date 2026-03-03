@@ -379,7 +379,7 @@ def _validate_task3_references(
         if not isinstance(raw_ref, dict):
             stats["quarantined"] += 1
             log.warn(
-                f"event=task3_ref_quarantined reason=invalid_record_type index={idx}"
+                f"event=task3_ref_quarantined reason=invalid_record_type object_id=unknown index={idx}"
             )
             continue
 
@@ -387,7 +387,7 @@ def _validate_task3_references(
         if object_id is None:
             stats["quarantined"] += 1
             log.warn(
-                f"event=task3_ref_quarantined reason=invalid_object_id index={idx} raw_object_id={raw_ref.get('object_id')}"
+                f"event=task3_ref_quarantined reason=invalid_object_id object_id=unknown index={idx} raw_object_id={raw_ref.get('object_id')}"
             )
             continue
 
@@ -578,12 +578,12 @@ def run_competition(log: Logger) -> None:
             duplicate_critical,
         ) = _validate_task3_references(log=log, server_refs=server_refs)
         if duplicate_critical:
-            image_matcher = None
             log.warn(
-                "Görev 3: ID integrity kritik eşiği aşıldı, kontrollü pasif moda geçildi "
-                "(task3_disable_reason=duplicate_ratio_critical)"
+                "Görev 3: ID integrity kritik eşiği aşıldı, sadece sorunlu referanslar quarantine edildi "
+                "(task3_quarantine_mode=duplicate_ratio_critical)"
             )
-        elif canonical_refs:
+
+        if canonical_refs:
             loaded = image_matcher.load_references(canonical_refs)
             if loaded == 0:
                 log.warn("Görev 3: Doğrulanan referanslar yüklense de matcher aktifleşmedi")

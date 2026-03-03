@@ -20,6 +20,7 @@ class ReferenceObject:
         keypoints: list,
         descriptors: Optional[np.ndarray],
         label: str = "",
+        trust_score: float = 1.0,
     ) -> None:
         self.object_id = object_id
         self.image = image
@@ -27,6 +28,7 @@ class ReferenceObject:
         self.keypoints = keypoints
         self.descriptors = descriptors
         self.label = label
+        self.trust_score = max(0.0, min(1.0, float(trust_score)))
 
 
 class ImageMatcher:
@@ -37,6 +39,8 @@ class ImageMatcher:
         self.references: List[ReferenceObject] = []
         self._references_by_id: Dict[int, ReferenceObject] = {}
         self._reference_lifecycle: Dict[int, str] = {}
+        self._reference_trust_scores: Dict[int, float] = {}
+        self._quarantined_references: Dict[int, str] = {}
         self._last_load_stats: Dict[str, int] = {
             "total": 0,
             "valid": 0,
@@ -87,10 +91,24 @@ class ImageMatcher:
             return None
         return object_id
 
+    def _set_reference_trust(self, object_id: int, score: float) -> None:
+        self._reference_trust_scores[object_id] = max(0.0, min(1.0, float(score)))
+
+    def _quarantine_reference(self, object_id: int, reason: str, context: str = "") -> None:
+        self._quarantined_references[object_id] = reason
+        self._reference_lifecycle[object_id] = "quarantined"
+        self._set_reference_trust(object_id, 0.0)
+        context_suffix = f" {context}" if context else ""
+        self.log.warn(
+            f"event=task3_ref_quarantined reason={reason} object_id={object_id}{context_suffix}"
+        )
+
     def load_references(self, reference_images: List[Dict[str, Any]]) -> int:
         self.references.clear()
         self._references_by_id.clear()
         self._reference_lifecycle.clear()
+        self._reference_trust_scores.clear()
+        self._quarantined_references.clear()
         self._last_load_stats = {
             "total": len(reference_images),
             "valid": 0,
@@ -103,7 +121,7 @@ class ImageMatcher:
             if not isinstance(ref_data, dict):
                 self._last_load_stats["quarantined"] += 1
                 self.log.warn(
-                    f"event=task3_ref_quarantined reason=invalid_record_type index={idx}"
+                    f"event=task3_ref_quarantined reason=invalid_record_type object_id=unknown index={idx}"
                 )
                 continue
 
@@ -111,7 +129,7 @@ class ImageMatcher:
             if object_id is None:
                 self._last_load_stats["quarantined"] += 1
                 self.log.warn(
-                    f"event=task3_ref_quarantined reason=invalid_object_id index={idx} raw_object_id={ref_data.get('object_id')}"
+                    f"event=task3_ref_quarantined reason=invalid_object_id object_id=unknown index={idx} raw_object_id={ref_data.get('object_id')}"
                 )
                 continue
 
@@ -123,8 +141,10 @@ class ImageMatcher:
                 self.log.warn(
                     f"event=task3_ref_duplicate_detected object_id={object_id} index={idx}"
                 )
-                self.log.warn(
-                    f"event=task3_ref_quarantined reason=duplicate_object_id object_id={object_id} index={idx}"
+                self._quarantine_reference(
+                    object_id=object_id,
+                    reason="duplicate_object_id",
+                    context=f"index={idx}",
                 )
                 continue
 
@@ -136,11 +156,11 @@ class ImageMatcher:
                 image = cv2.imread(ref_data["path"])
                 if image is None:
                     self._last_load_stats["quarantined"] += 1
-                    self.log.warn(f"Referans obje okunamadı: {ref_data['path']}")
+                    self._quarantine_reference(object_id, "image_read_failed", context=f"index={idx} path={ref_data['path']}")
                     continue
             else:
                 self._last_load_stats["quarantined"] += 1
-                self.log.warn(f"Referans obje #{object_id} için geçerli görüntü bulunamadı")
+                self._quarantine_reference(object_id, "missing_image_source", context=f"index={idx}")
                 continue
 
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
@@ -148,18 +168,24 @@ class ImageMatcher:
 
             if descriptors is None or len(keypoints) < 4:
                 self._last_load_stats["quarantined"] += 1
-                self.log.warn(
-                    f"Referans obje #{object_id}: yetersiz feature ({len(keypoints) if keypoints else 0})"
+                self._quarantine_reference(
+                    object_id,
+                    "insufficient_feature",
+                    context=f"index={idx} feature_count={len(keypoints) if keypoints else 0}",
                 )
                 continue
 
             self._reference_lifecycle[object_id] = "validated"
+            feature_ratio = min(1.0, len(keypoints) / 150.0)
+            trust_score = max(0.35, feature_ratio)
+            self._set_reference_trust(object_id, trust_score)
             ref_obj = ReferenceObject(
                 object_id=object_id,
                 image=image,
                 keypoints=keypoints,
                 descriptors=descriptors,
                 label=label,
+                trust_score=trust_score,
             )
             self.references.append(ref_obj)
             self._references_by_id[object_id] = ref_obj
@@ -169,7 +195,7 @@ class ImageMatcher:
 
             self.log.info(
                 f"Referans #{object_id} yüklendi: "
-                f"{ref_obj.w}x{ref_obj.h}px, {len(keypoints)} feature"
+                f"{ref_obj.w}x{ref_obj.h}px, {len(keypoints)} feature, trust={trust_score:.2f}"
             )
 
         self.references = list(self._references_by_id.values())
@@ -226,11 +252,16 @@ class ImageMatcher:
         results: List[Dict[str, Any]] = []
 
         for ref in self.references:
+            current_trust = self._reference_trust_scores.get(ref.object_id, ref.trust_score)
+            if ref.object_id in self._quarantined_references or current_trust < 0.30:
+                continue
+
             bbox = self._match_reference(ref, frame_kp, frame_desc, gray.shape)
             if bbox is not None:
                 if ref.object_id not in self._references_by_id:
                     continue
                 self._reference_lifecycle[ref.object_id] = "matched"
+                self._set_reference_trust(ref.object_id, min(1.0, current_trust + 0.02))
                 results.append({
                     "object_id": ref.object_id,
                     "top_left_x": bbox[0],
@@ -238,6 +269,15 @@ class ImageMatcher:
                     "bottom_right_x": bbox[2],
                     "bottom_right_y": bbox[3],
                 })
+            else:
+                updated_trust = max(0.0, current_trust - 0.01)
+                self._set_reference_trust(ref.object_id, updated_trust)
+                if updated_trust < 0.30:
+                    self._quarantine_reference(
+                        ref.object_id,
+                        "low_trust_after_mismatch",
+                        context=f"frame={self._frame_counter} trust={updated_trust:.2f}",
+                    )
 
         if results:
             self.log.debug(
@@ -341,6 +381,8 @@ class ImageMatcher:
         self.references.clear()
         self._references_by_id.clear()
         self._reference_lifecycle.clear()
+        self._reference_trust_scores.clear()
+        self._quarantined_references.clear()
         self._last_load_stats = {
             "total": 0,
             "valid": 0,
@@ -357,3 +399,11 @@ class ImageMatcher:
     @property
     def last_load_stats(self) -> Dict[str, int]:
         return dict(self._last_load_stats)
+
+    @property
+    def reference_trust_scores(self) -> Dict[int, float]:
+        return dict(self._reference_trust_scores)
+
+    @property
+    def quarantined_references(self) -> Dict[int, str]:
+        return dict(self._quarantined_references)
