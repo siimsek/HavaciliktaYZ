@@ -131,22 +131,27 @@ mkdir model
 
 ## 💻 Kullanım
 
-### Varsayılan (Yarışma Modu, Non-Interactive)
+### Varsayılan (Visual Validation / Test Modu, Non-Interactive)
 
 ```bash
 python main.py
 ```
 
+> Varsayılan çalışma yolu görsel doğrulama/test odaklıdır (VID simülasyon + pencere çıktısı).
+
 ### CLI-First Modlar
 
 ```bash
-# Yarışma modu
+# Yarışma modu (şartname operasyon modu)
 python main.py --mode competition --deterministic-profile max
 
-# Otonom test (VID — Görev 1 + 2 + 3)
+# Visual validation / test modu (varsayılan ile aynı)
+python main.py --mode visual_validation
+
+# Geriye dönük alias: VID simülasyon
 python main.py --mode simulate_vid --show
 
-# Otonom test (DET — Görev 1)
+# Geriye dönük alias: DET simülasyon
 python main.py --mode simulate_det --save
 
 # Eski menüyü kullanmak isterseniz
@@ -220,6 +225,7 @@ Tüm ayarlar [`config/settings.py`](config/settings.py) içinde merkezi olarak y
 | `BASE_URL` | `http://127.0.0.1:5000` | Sunucu adresi (yarışma günü güncellenir) |
 | `TEAM_NAME` | `"Takim_ID"` | Takım kimliği (yarışma günü güncellenir) |
 | `SIMULATION_MODE` | `True` | Legacy simülasyon bayrağı (runtime CLI-first çalışır) |
+| `DEFAULT_RUNTIME_MODE` | `"visual_validation"` | Varsayılan çalışma modu (insan-doğrulamalı test akışı) |
 | `DEBUG` | `True` | Detaylı log + görsel çıktı |
 | `MAX_FRAMES` | `2250` | Yarışma karesi limiti (sunucudan dinamik alınabilir) |
 

@@ -17,12 +17,19 @@ class Settings:
     ENDPOINT_SUBMIT_RESULT: str = "/submit_result"
     TEAM_NAME: str = "Takim_ID"
     SIMULATION_MODE: bool = True
+    DEFAULT_RUNTIME_MODE: str = "visual_validation"
+    COMPETITION_RUNTIME_MODE: str = "competition"
+    VISUAL_VALIDATION_RUNTIME_MODE: str = "visual_validation"
     DEBUG: bool = True
 
     # Model
-    MODEL_PATH: str = os.path.join(str(PROJECT_ROOT), "model", "best_mAP50-0.923_mAP50-95-0.766.pt")
-    CONFIDENCE_THRESHOLD: float = 0.40  # 0.0-1.0, düşük = daha fazla tespit (noise riski)
-    NMS_IOU_THRESHOLD: float = 0.15     # Çakışan kutuları bastırma eşiği
+    MODEL_PATH: str = os.path.join(
+        str(PROJECT_ROOT), "model", "best_mAP50-0.923_mAP50-95-0.766.pt"
+    )
+    CONFIDENCE_THRESHOLD: float = (
+        0.40  # 0.0-1.0, düşük = daha fazla tespit (noise riski)
+    )
+    NMS_IOU_THRESHOLD: float = 0.15  # Çakışan kutuları bastırma eşiği
     DEVICE: str = "cuda"
     HALF_PRECISION: bool = True
     INFERENCE_SIZE: int = 1280
@@ -58,46 +65,46 @@ class Settings:
     TASK3_DUPLICATE_DEGRADE_MIN_COUNT: int = 3
 
     # Sınıflar (şartname)
-    CLASS_TASIT: int = 0       # Taşıt
-    CLASS_INSAN: int = 1       # İnsan
-    CLASS_UAP: int = 2         # Uçan Araba Park Alanı
-    CLASS_UAI: int = 3         # Uçan Ambulans İniş Alanı
+    CLASS_TASIT: int = 0  # Taşıt
+    CLASS_INSAN: int = 1  # İnsan
+    CLASS_UAP: int = 2  # Uçan Araba Park Alanı
+    CLASS_UAI: int = 3  # Uçan Ambulans İniş Alanı
 
     # İniş Durumu Kodları
-    LANDING_NOT_AREA: str = "-1"    # İniş alanı değil (Taşıt/İnsan)
+    LANDING_NOT_AREA: str = "-1"  # İniş alanı değil (Taşıt/İnsan)
     LANDING_NOT_SUITABLE: str = "0"  # İniş için uygun değil
     LANDING_SUITABLE: str = "1"
 
     # COCO → TEKNOFEST eşleme
     COCO_TO_TEKNOFEST: dict = {
-        0: 1,    # person → İnsan
-        1: 0,    # bicycle → Taşıt (sürücüsüyle birlikte)
-        2: 0,    # car → Taşıt
-        3: 0,    # motorcycle → Taşıt
-        5: 0,    # bus → Taşıt
-        6: 0,    # train → Taşıt (vagonlar dahil)
-        7: 0,    # truck → Taşıt
-        8: 0,    # boat → Taşıt (deniz taşıtı)
+        0: 1,  # person → İnsan
+        1: 0,  # bicycle → Taşıt (sürücüsüyle birlikte)
+        2: 0,  # car → Taşıt
+        3: 0,  # motorcycle → Taşıt
+        5: 0,  # bus → Taşıt
+        6: 0,  # train → Taşıt (vagonlar dahil)
+        7: 0,  # truck → Taşıt
+        8: 0,  # boat → Taşıt (deniz taşıtı)
     }
 
     # VisDrone/benzeri format → TEKNOFEST (pedestrian, car, van vb. sınıf ID'leri)
     VISDRONE_TO_TEKNOFEST: dict = {
-        1: 1,     # pedestrian → İnsan
-        2: 1,     # people → İnsan
-        3: 0,     # bicycle → Taşıt
-        4: 0,     # car → Taşıt
-        5: 0,     # van → Taşıt
-        6: 0,     # truck → Taşıt
-        7: 0,     # tricycle → Taşıt
-        8: 0,     # awning-tricycle → Taşıt
-        9: 0,     # bus → Taşıt
-        10: 0,    # motor → Taşıt
+        1: 1,  # pedestrian → İnsan
+        2: 1,  # people → İnsan
+        3: 0,  # bicycle → Taşıt
+        4: 0,  # car → Taşıt
+        5: 0,  # van → Taşıt
+        6: 0,  # truck → Taşıt
+        7: 0,  # tricycle → Taşıt
+        8: 0,  # awning-tricycle → Taşıt
+        9: 0,  # bus → Taşıt
+        10: 0,  # motor → Taşıt
     }
 
-    LANDING_IOU_THRESHOLD: float = 0.0   # 0 = herhangi kesişim → uygun değil (şartname)
+    LANDING_IOU_THRESHOLD: float = 0.0  # 0 = herhangi kesişim → uygun değil (şartname)
     LANDING_PROXIMITY_MARGIN: float = 0.10  # Perspektif toleransı: bbox %10 genişletme
 
-    EDGE_MARGIN_RATIO: float = 0.004    # UAP/UAİ kadraj kenarına değiyorsa → uygun değil
+    EDGE_MARGIN_RATIO: float = 0.004  # UAP/UAİ kadraj kenarına değiyorsa → uygun değil
     UNKNOWN_OBJECTS_AS_OBSTACLES: bool = True
 
     LANDING_ZONE_CONTAINMENT_IOU: float = 0.70
@@ -193,15 +200,20 @@ _TASK3_YAML_PATH: Path = Path(__file__).resolve().parent / "task3_params.yaml"
 if _TASK3_YAML_PATH.is_file():
     try:
         import yaml
+
         with open(_TASK3_YAML_PATH, encoding="utf-8") as f:
             _task3_override = yaml.safe_load(f)
         if isinstance(_task3_override, dict):
             if "t_confirm" in _task3_override:
-                Settings.TASK3_SIMILARITY_THRESHOLD = float(_task3_override["t_confirm"])
+                Settings.TASK3_SIMILARITY_THRESHOLD = float(
+                    _task3_override["t_confirm"]
+                )
             if "t_fallback" in _task3_override:
                 Settings.TASK3_FALLBACK_THRESHOLD = float(_task3_override["t_fallback"])
             if "n_fallback_interval" in _task3_override:
-                Settings.TASK3_FALLBACK_INTERVAL = int(_task3_override["n_fallback_interval"])
+                Settings.TASK3_FALLBACK_INTERVAL = int(
+                    _task3_override["n_fallback_interval"]
+                )
             if "grid_stride" in _task3_override:
                 Settings.TASK3_GRID_STRIDE = int(_task3_override["grid_stride"])
     except (ImportError, OSError, ValueError, TypeError):

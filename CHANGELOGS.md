@@ -1,5 +1,14 @@
 # CHANGELOGS
 
+## 0.0.36 - 2026-03-03
+- **feat(runtime)**: Çalışma modu sözleşmesi iki ana moda netleştirildi: `competition` ve `visual_validation`.
+- **feat(cli)**: Varsayılan başlatma modu `visual_validation` olarak ayarlandı; `competition` açıkça seçilebilir bırakıldı.
+- **chore(compat)**: Geriye dönük uyumluluk için `simulate_vid` ve `simulate_det` CLI aliasları korundu.
+- **chore(config)**: `config/settings.py` içine merkezi mod sabitleri eklendi (`DEFAULT_RUNTIME_MODE`, `COMPETITION_RUNTIME_MODE`, `VISUAL_VALIDATION_RUNTIME_MODE`).
+- **docs(readme)**: Kullanım ve yapılandırma bölümleri, varsayılanın görsel doğrulama/test modu olduğunu açıkça gösterecek şekilde güncellendi.
+- **test(runtime)**: Varsayılan modun `visual_validation` olduğunu ve bu modun simülasyon yoluna yönlendiğini doğrulayan testler eklendi/güncellendi.
+- **chore(validation)**: Ubuntu 22.04 uyumlu mevcut bağımlılık/çalıştırma varsayımları korunarak formatter/linter/test doğrulamaları tekrarlandı.
+
 ## 0.0.34 - 2026-03-01
 - **fix(network)**: Fixed E999 SyntaxError — `if response.status_code == 204` and 5xx branches moved inside `try` block with correct indentation.
 - **chore(lint)**: Resolved flake8 errors project-wide (W291/W293 trailing/blank whitespace, E261/E302/E303/E305, E501 line length, F401 unused imports, E731 lambda, W391).

@@ -70,13 +70,56 @@ from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_
 from main import run_simulation
 
 
+@unittest.skipUnless(main_module is not None, "main runtime missing")
+class TestRuntimeModeSelection:
+    def test_parse_args_default_mode_is_visual_validation(self):
+        with patch("sys.argv", ["main.py"]):
+            args = main_module.parse_args()
+        assert args.mode == Settings.DEFAULT_RUNTIME_MODE
+
+    def test_visual_validation_mode_runs_simulation_path(self):
+        with patch.object(main_module, "parse_args") as parse_args_mock, patch.object(
+            main_module, "run_simulation"
+        ) as run_simulation_mock, patch.object(
+            main_module, "run_competition"
+        ) as run_competition_mock, patch.object(
+            main_module, "apply_runtime_profile"
+        ), patch.object(
+            main_module, "apply_runtime_overrides"
+        ), patch.object(
+            main_module, "print_system_info"
+        ), patch(
+            "main.print", return_value=None
+        ):
+            parse_args_mock.return_value = type(
+                "Args",
+                (),
+                {
+                    "mode": "visual_validation",
+                    "interactive": False,
+                    "deterministic_profile": "balanced",
+                    "base_url": None,
+                    "team_name": None,
+                    "show": False,
+                    "save": False,
+                    "seed": None,
+                    "sequence": None,
+                },
+            )()
+
+            main_module.main()
+
+        assert run_simulation_mock.called
+        assert not run_competition_mock.called
+
+
 class TestLogger:
-    @patch('builtins.print')
+    @patch("builtins.print")
     def test_logger_info(self, mock_print):
         Logger("TestModule").info("Test message")
         assert mock_print.called
 
-    @patch('builtins.print')
+    @patch("builtins.print")
     def test_logger_debug(self, mock_print):
         logger = Logger("TestModule")
         Settings.DEBUG = True
@@ -88,17 +131,17 @@ class TestLogger:
         assert not mock_print.called
         Settings.DEBUG = True
 
-    @patch('builtins.print')
+    @patch("builtins.print")
     def test_logger_error(self, mock_print):
         Logger("TestModule").error("Error")
         assert mock_print.called
 
-    @patch('builtins.print')
+    @patch("builtins.print")
     def test_logger_warn(self, mock_print):
         Logger("TestModule").warn("Warn")
         assert mock_print.called
 
-    @patch('builtins.print')
+    @patch("builtins.print")
     def test_logger_success(self, mock_print):
         Logger("TestModule").success("OK")
         assert mock_print.called
@@ -110,9 +153,9 @@ class TestSanitizeAndLogs:
         assert _sanitize_log_component("invalid?name!") == "invalid_name_"
         assert _sanitize_log_component("") == "general"
 
-    @patch('os.makedirs')
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('src.utils._prune_old_logs')
+    @patch("os.makedirs")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("src.utils._prune_old_logs")
     def test_log_json_to_disk(self, mock_prune, mock_file, mock_makedirs):
         data = {"key": "value"}
         Settings.LOG_DIR = "/fake/dir"
@@ -123,9 +166,9 @@ class TestSanitizeAndLogs:
         written = "".join(c.args[0] for c in mock_file().write.call_args_list)
         assert json.loads(written) == data
 
-    @patch('os.listdir')
-    @patch('os.path.getmtime')
-    @patch('os.remove')
+    @patch("os.listdir")
+    @patch("os.path.getmtime")
+    @patch("os.remove")
     def test_prune_old_logs(self, mock_remove, mock_getmtime, mock_listdir):
         mock_listdir.return_value = ["log1.json", "log2.json", "log3.json"]
         mock_getmtime.side_effect = [1.0, 3.0, 2.0]
@@ -165,10 +208,16 @@ class TestRuntimeProfile:
 #  §3  SEND STATE TESTS
 # =============================================================================
 
+
 class TestSendState:
     @staticmethod
     def _counters():
-        return {"send_ok": 0, "send_fallback_ok": 0, "send_fail": 0, "send_permanent_reject": 0}
+        return {
+            "send_ok": 0,
+            "send_fallback_ok": 0,
+            "send_fail": 0,
+            "send_permanent_reject": 0,
+        }
 
     def test_acked(self):
         c = self._counters()
@@ -202,11 +251,16 @@ class TestSendState:
 class TestEdgeMarginRatio(unittest.TestCase):
     def test_is_touching_edge_uses_ratio(self):
         from src.detection import ObjectDetector
+
         orig = Settings.EDGE_MARGIN_RATIO
         Settings.EDGE_MARGIN_RATIO = 0.01
         try:
-            self.assertTrue(ObjectDetector._is_touching_edge((5, 50, 100, 150), 1000, 500))
-            self.assertFalse(ObjectDetector._is_touching_edge((15, 50, 100, 150), 1000, 500))
+            self.assertTrue(
+                ObjectDetector._is_touching_edge((5, 50, 100, 150), 1000, 500)
+            )
+            self.assertFalse(
+                ObjectDetector._is_touching_edge((15, 50, 100, 150), 1000, 500)
+            )
         finally:
             Settings.EDGE_MARGIN_RATIO = orig
 
@@ -214,7 +268,12 @@ class TestEdgeMarginRatio(unittest.TestCase):
 class TestMainAckStateMachine:
     @staticmethod
     def _counters():
-        return {"send_ok": 0, "send_fail": 0, "send_fallback_ok": 0, "send_permanent_reject": 0}
+        return {
+            "send_ok": 0,
+            "send_fail": 0,
+            "send_fallback_ok": 0,
+            "send_permanent_reject": 0,
+        }
 
     def test_retryable_failure_keeps_pending(self):
         pending = {"frame_id": "f-1"}
@@ -224,7 +283,9 @@ class TestMainAckStateMachine:
 
     def test_fallback_acked_clears_pending(self):
         c = self._counters()
-        p, abort, ok = apply_send_result_status("fallback_acked", {"frame_id": "f-2"}, c)
+        p, abort, ok = apply_send_result_status(
+            "fallback_acked", {"frame_id": "f-2"}, c
+        )
         assert p is None and not abort and ok
         assert c["send_ok"] == 1 and c["send_fallback_ok"] == 1
 
@@ -243,11 +304,13 @@ class TestTask3ReferenceValidation(unittest.TestCase):
             {"object_id": 1, "image": np.zeros((12, 12, 3), dtype=np.uint8)},
             {"object_id": 2, "image": np.zeros((12, 12, 3), dtype=np.uint8)},
         ]
-        canonical, stats, mode, reason, disabled = main_module._validate_task3_references(
-            main_module.Logger("Test"), refs
+        canonical, stats, mode, reason, disabled = (
+            main_module._validate_task3_references(main_module.Logger("Test"), refs)
         )
         self.assertEqual(len(canonical), 2)
-        self.assertEqual(stats, {"total": 2, "valid": 2, "duplicate": 0, "quarantined": 0})
+        self.assertEqual(
+            stats, {"total": 2, "valid": 2, "duplicate": 0, "quarantined": 0}
+        )
         self.assertEqual(mode, "normal")
         self.assertEqual(reason, "ok")
         self.assertFalse(disabled)
@@ -257,8 +320,8 @@ class TestTask3ReferenceValidation(unittest.TestCase):
             {"object_id": 7, "image": np.zeros((12, 12, 3), dtype=np.uint8)},
             {"object_id": "7", "image": np.ones((12, 12, 3), dtype=np.uint8)},
         ]
-        canonical, stats, mode, reason, disabled = main_module._validate_task3_references(
-            main_module.Logger("Test"), refs
+        canonical, stats, mode, reason, disabled = (
+            main_module._validate_task3_references(main_module.Logger("Test"), refs)
         )
         self.assertEqual(len(canonical), 1)
         self.assertEqual(canonical[0]["object_id"], 7)
@@ -273,8 +336,8 @@ class TestTask3ReferenceValidation(unittest.TestCase):
             {"object_id": None, "image": np.zeros((12, 12, 3), dtype=np.uint8)},
             {"object_id": "abc", "image": np.zeros((12, 12, 3), dtype=np.uint8)},
         ]
-        canonical, stats, mode, reason, disabled = main_module._validate_task3_references(
-            main_module.Logger("Test"), refs
+        canonical, stats, mode, reason, disabled = (
+            main_module._validate_task3_references(main_module.Logger("Test"), refs)
         )
         self.assertEqual(canonical, [])
         self.assertEqual(stats["valid"], 0)
@@ -405,16 +468,21 @@ class TestSessionResilience:
         assert reason is not None
 
 
-@patch('src.data_loader.DatasetLoader')
-@patch('main.ObjectDetector')
-@patch('main.VisualOdometry')
-@patch('main.MovementEstimator')
-@patch('main.Logger')
-@patch('main.Visualizer')
-@patch('src.image_matcher.ImageMatcher')
+@patch("src.data_loader.DatasetLoader")
+@patch("main.ObjectDetector")
+@patch("main.VisualOdometry")
+@patch("main.MovementEstimator")
+@patch("main.Logger")
+@patch("main.Visualizer")
+@patch("src.image_matcher.ImageMatcher")
 def test_run_simulation_stops_on_max_frames(
-    MockImageMatcher, MockVisualizer, MockLogger,
-    MockEstimator, MockOdometry, MockDetector, MockDatasetLoader,
+    MockImageMatcher,
+    MockVisualizer,
+    MockLogger,
+    MockEstimator,
+    MockOdometry,
+    MockDetector,
+    MockDatasetLoader,
 ):
     mock_loader = MockDatasetLoader.return_value
     mock_loader.is_ready = True
@@ -427,14 +495,16 @@ def test_run_simulation_stops_on_max_frames(
     MockOdometry.return_value.update.return_value = {"x": 0.0, "y": 0.0, "z": 0.0}
     MockImageMatcher.return_value.match.return_value = []
 
-    with patch('config.settings.Settings.MAX_FRAMES', 1):
+    with patch("config.settings.Settings.MAX_FRAMES", 1):
         run_simulation(MockLogger(), prefer_vid=False, show=False, save=False)
 
     assert mock_loader.__iter__.called
     assert MockDetector.return_value.detect.call_count == 1
 
 
-@unittest.skipUnless(cv2 is not None and MovementEstimator is not None, "opencv/runtime deps missing")
+@unittest.skipUnless(
+    cv2 is not None and MovementEstimator is not None, "opencv/runtime deps missing"
+)
 class TestMovementCompensation(unittest.TestCase):
     def setUp(self):
         self._orig = {
@@ -464,8 +534,16 @@ class TestMovementCompensation(unittest.TestCase):
         return cv2.warpAffine(base, m, (320, 320))
 
     def _vehicle(self, x1, y1, x2, y2):
-        return [{"cls": "0", "top_left_x": x1, "top_left_y": y1,
-                 "bottom_right_x": x2, "bottom_right_y": y2, "landing_status": "-1"}]
+        return [
+            {
+                "cls": "0",
+                "top_left_x": x1,
+                "top_left_y": y1,
+                "bottom_right_x": x2,
+                "bottom_right_y": y2,
+                "landing_status": "-1",
+            }
+        ]
 
     def test_stationary_vehicle_with_camera_pan_marked_static(self):
         Settings.MOTION_COMP_ENABLED = True
@@ -496,10 +574,15 @@ class TestMovementCompensation(unittest.TestCase):
         self.assertEqual(out[0]["motion_status"], "0")
 
 
-@unittest.skipUnless(NetworkManager is not None and FrameFetchStatus is not None, "network deps missing")
+@unittest.skipUnless(
+    NetworkManager is not None and FrameFetchStatus is not None, "network deps missing"
+)
 class TestFrameDedup(unittest.TestCase):
     def setUp(self):
-        self._orig = {"MAX_RETRIES": Settings.MAX_RETRIES, "SEEN_FRAME_LRU_SIZE": Settings.SEEN_FRAME_LRU_SIZE}
+        self._orig = {
+            "MAX_RETRIES": Settings.MAX_RETRIES,
+            "SEEN_FRAME_LRU_SIZE": Settings.SEEN_FRAME_LRU_SIZE,
+        }
         Settings.MAX_RETRIES = 1
         Settings.SEEN_FRAME_LRU_SIZE = 2
 
@@ -527,10 +610,15 @@ class TestFrameDedup(unittest.TestCase):
         self.assertFalse(mgr._mark_seen_frame("A"))
 
 
-@unittest.skipUnless(NetworkManager is not None and SendResultStatus is not None, "network deps missing")
+@unittest.skipUnless(
+    NetworkManager is not None and SendResultStatus is not None, "network deps missing"
+)
 class TestIdempotencySubmit(unittest.TestCase):
     def setUp(self):
-        self._orig = {"MAX_RETRIES": Settings.MAX_RETRIES, "IDEMPOTENCY_KEY_PREFIX": Settings.IDEMPOTENCY_KEY_PREFIX}
+        self._orig = {
+            "MAX_RETRIES": Settings.MAX_RETRIES,
+            "IDEMPOTENCY_KEY_PREFIX": Settings.IDEMPOTENCY_KEY_PREFIX,
+        }
         Settings.MAX_RETRIES = 1
         Settings.IDEMPOTENCY_KEY_PREFIX = "aia"
 
@@ -542,9 +630,15 @@ class TestIdempotencySubmit(unittest.TestCase):
         mgr = NetworkManager(base_url="http://test", simulation_mode=False)
         mgr.session.post = Mock(return_value=Mock(status_code=200))
         ok = mgr.send_result(
-            frame_id="frame-7", detected_objects=[],
-            detected_translation={"translation_x": 0, "translation_y": 0, "translation_z": 0},
-            frame_data={"id": "frame-7", "url": "/f/7"}, frame_shape=None,
+            frame_id="frame-7",
+            detected_objects=[],
+            detected_translation={
+                "translation_x": 0,
+                "translation_y": 0,
+                "translation_z": 0,
+            },
+            frame_data={"id": "frame-7", "url": "/f/7"},
+            frame_shape=None,
         )
         self.assertEqual(ok, SendResultStatus.ACKED)
         key = mgr.session.post.call_args.kwargs["headers"]["Idempotency-Key"]
@@ -555,9 +649,15 @@ class TestIdempotencySubmit(unittest.TestCase):
         mgr = NetworkManager(base_url="http://test", simulation_mode=False)
         mgr.session.post = Mock(return_value=Mock(status_code=200))
         kw = dict(
-            frame_id="frame-9", detected_objects=[],
-            detected_translation={"translation_x": 0, "translation_y": 0, "translation_z": 0},
-            frame_data={"id": "frame-9", "url": "/f/9"}, frame_shape=None,
+            frame_id="frame-9",
+            detected_objects=[],
+            detected_translation={
+                "translation_x": 0,
+                "translation_y": 0,
+                "translation_z": 0,
+            },
+            frame_data={"id": "frame-9", "url": "/f/9"},
+            frame_shape=None,
         )
         first = mgr.send_result(**kw)
         second = mgr.send_result(**kw)
@@ -568,11 +668,14 @@ class TestIdempotencySubmit(unittest.TestCase):
         self.assertEqual(mgr.session.post.call_count, 2)
 
 
-@unittest.skipUnless(requests is not None and NetworkManager is not None, "network deps missing")
+@unittest.skipUnless(
+    requests is not None and NetworkManager is not None, "network deps missing"
+)
 class TestNetworkTimeouts(unittest.TestCase):
     def setUp(self):
         self._orig = {
-            "MAX_RETRIES": Settings.MAX_RETRIES, "REQUEST_TIMEOUT": Settings.REQUEST_TIMEOUT,
+            "MAX_RETRIES": Settings.MAX_RETRIES,
+            "REQUEST_TIMEOUT": Settings.REQUEST_TIMEOUT,
             "REQUEST_CONNECT_TIMEOUT_SEC": Settings.REQUEST_CONNECT_TIMEOUT_SEC,
             "REQUEST_READ_TIMEOUT_SEC_FRAME_META": Settings.REQUEST_READ_TIMEOUT_SEC_FRAME_META,
             "REQUEST_READ_TIMEOUT_SEC_IMAGE": Settings.REQUEST_READ_TIMEOUT_SEC_IMAGE,
@@ -597,25 +700,46 @@ class TestNetworkTimeouts(unittest.TestCase):
 
     def test_timeout_tuple_is_used_per_endpoint(self):
         mgr = NetworkManager(base_url="http://test", simulation_mode=False)
-        frame_resp, image_resp, submit_resp = Mock(status_code=204), Mock(status_code=500), Mock(status_code=200)
+        frame_resp, image_resp, submit_resp = (
+            Mock(status_code=204),
+            Mock(status_code=500),
+            Mock(status_code=200),
+        )
         get_calls = []
 
         def fake_get(url, **kwargs):
             get_calls.append((url, kwargs))
-            return frame_resp if url.endswith(Settings.ENDPOINT_NEXT_FRAME) else image_resp
+            return (
+                frame_resp if url.endswith(Settings.ENDPOINT_NEXT_FRAME) else image_resp
+            )
 
         mgr.session.get = fake_get
         mgr.session.post = Mock(return_value=submit_resp)
         mgr.get_frame()
         mgr.download_image({"frame_url": "/frame.jpg"})
         mgr.send_result(
-            frame_id="f1", detected_objects=[],
-            detected_translation={"translation_x": 0, "translation_y": 0, "translation_z": 0},
-            frame_data={"id": "f1", "url": "/frame/1"}, frame_shape=None,
+            frame_id="f1",
+            detected_objects=[],
+            detected_translation={
+                "translation_x": 0,
+                "translation_y": 0,
+                "translation_z": 0,
+            },
+            frame_data={"id": "f1", "url": "/frame/1"},
+            frame_shape=None,
         )
-        expected_frame = (Settings.REQUEST_CONNECT_TIMEOUT_SEC, Settings.REQUEST_READ_TIMEOUT_SEC_FRAME_META)
-        expected_image = (Settings.REQUEST_CONNECT_TIMEOUT_SEC, Settings.REQUEST_READ_TIMEOUT_SEC_IMAGE)
-        expected_submit = (Settings.REQUEST_CONNECT_TIMEOUT_SEC, Settings.REQUEST_READ_TIMEOUT_SEC_SUBMIT)
+        expected_frame = (
+            Settings.REQUEST_CONNECT_TIMEOUT_SEC,
+            Settings.REQUEST_READ_TIMEOUT_SEC_FRAME_META,
+        )
+        expected_image = (
+            Settings.REQUEST_CONNECT_TIMEOUT_SEC,
+            Settings.REQUEST_READ_TIMEOUT_SEC_IMAGE,
+        )
+        expected_submit = (
+            Settings.REQUEST_CONNECT_TIMEOUT_SEC,
+            Settings.REQUEST_READ_TIMEOUT_SEC_SUBMIT,
+        )
         self.assertEqual(get_calls[0][1]["timeout"], expected_frame)
         self.assertEqual(get_calls[1][1]["timeout"], expected_image)
         self.assertEqual(mgr.session.post.call_args.kwargs["timeout"], expected_submit)
@@ -663,9 +787,14 @@ class TestNetworkPayloadGuard(unittest.TestCase):
     @staticmethod
     def _obj(cls, conf, x, y):
         return {
-            "cls": cls, "landing_status": "-1", "motion_status": "0",
-            "top_left_x": x, "top_left_y": y,
-            "bottom_right_x": x + 10, "bottom_right_y": y + 10, "_confidence": conf,
+            "cls": cls,
+            "landing_status": "-1",
+            "motion_status": "0",
+            "top_left_x": x,
+            "top_left_y": y,
+            "bottom_right_x": x + 10,
+            "bottom_right_y": y + 10,
+            "_confidence": conf,
         }
 
     def test_limit_and_class_quota_are_enforced(self):
@@ -686,15 +815,24 @@ class TestNetworkPayloadGuard(unittest.TestCase):
         self.assertGreater(stats["dropped_total"], 0)
 
     def test_capping_is_deterministic(self):
-        src = [self._obj("0", 0.90, 5, 5), self._obj("0", 0.80, 6, 6),
-               self._obj("1", 0.95, 4, 8), self._obj("2", 0.70, 1, 2), self._obj("3", 0.60, 3, 1)]
+        src = [
+            self._obj("0", 0.90, 5, 5),
+            self._obj("0", 0.80, 6, 6),
+            self._obj("1", 0.95, 4, 8),
+            self._obj("2", 0.70, 1, 2),
+            self._obj("3", 0.60, 3, 1),
+        ]
         a, _ = self.net._apply_object_caps(src + src, frame_id="f-2")
-        b, _ = self.net._apply_object_caps(list(reversed(copy.deepcopy(src + src))), frame_id="f-2")
+        b, _ = self.net._apply_object_caps(
+            list(reversed(copy.deepcopy(src + src))), frame_id="f-2"
+        )
         self.assertEqual(a, b)
 
     def test_preflight_invalid_payload_forces_fallback(self):
         payload, rej, clip = self.net._preflight_validate_and_normalize_payload(
-            payload={"id": 1, "user": "u"}, frame_shape=None, frame_id="f-3",
+            payload={"id": 1, "user": "u"},
+            frame_shape=None,
+            frame_id="f-3",
         )
         self.assertTrue(rej)
         self.assertFalse(clip)
@@ -703,9 +841,15 @@ class TestNetworkPayloadGuard(unittest.TestCase):
         self.net.session = Mock()
         self.net.session.post = Mock(side_effect=[_Response(400), _Response(200)])
         status = self.net.send_result(
-            frame_id="f-4", detected_objects=[{"cls": "0", "confidence": 0.9}],
-            detected_translation={"translation_x": 1, "translation_y": 2, "translation_z": 3},
-            frame_data={"id": "f-4", "user": "u", "url": "frame-url"}, frame_shape=(1080, 1920, 3),
+            frame_id="f-4",
+            detected_objects=[{"cls": "0", "confidence": 0.9}],
+            detected_translation={
+                "translation_x": 1,
+                "translation_y": 2,
+                "translation_z": 3,
+            },
+            frame_data={"id": "f-4", "user": "u", "url": "frame-url"},
+            frame_shape=(1080, 1920, 3),
         )
         self.assertEqual(status, SendResultStatus.FALLBACK_ACKED)
 
@@ -713,9 +857,15 @@ class TestNetworkPayloadGuard(unittest.TestCase):
         self.net.session = Mock()
         self.net.session.post = Mock(side_effect=[_Response(422), _Response(400)])
         status = self.net.send_result(
-            frame_id="f-5", detected_objects=[{"cls": "0", "confidence": 0.9}],
-            detected_translation={"translation_x": 1, "translation_y": 2, "translation_z": 3},
-            frame_data={"id": "f-5", "user": "u", "url": "frame-url"}, frame_shape=(1080, 1920, 3),
+            frame_id="f-5",
+            detected_objects=[{"cls": "0", "confidence": 0.9}],
+            detected_translation={
+                "translation_x": 1,
+                "translation_y": 2,
+                "translation_z": 3,
+            },
+            frame_data={"id": "f-5", "user": "u", "url": "frame-url"},
+            frame_shape=(1080, 1920, 3),
         )
         self.assertEqual(status, SendResultStatus.PERMANENT_REJECTED)
 
@@ -723,9 +873,15 @@ class TestNetworkPayloadGuard(unittest.TestCase):
         self.net.session = Mock()
         self.net.session.post = Mock(side_effect=[_Response(500)] * 3)
         status = self.net.send_result(
-            frame_id="f-6", detected_objects=[{"cls": "0", "confidence": 0.9}],
-            detected_translation={"translation_x": 1, "translation_y": 2, "translation_z": 3},
-            frame_data={"id": "f-6", "user": "u", "url": "frame-url"}, frame_shape=(1080, 1920, 3),
+            frame_id="f-6",
+            detected_objects=[{"cls": "0", "confidence": 0.9}],
+            detected_translation={
+                "translation_x": 1,
+                "translation_y": 2,
+                "translation_z": 3,
+            },
+            frame_data={"id": "f-6", "user": "u", "url": "frame-url"},
+            frame_shape=(1080, 1920, 3),
         )
         self.assertEqual(status, SendResultStatus.RETRYABLE_FAILURE)
 
@@ -741,7 +897,9 @@ class TestCompetitionPayloadSchema(unittest.TestCase):
             "bottom_right_x": 20,
             "bottom_right_y": 30,
         }
-        out, alias_count = CompetitionPayloadSchema.canonicalize_objects([obj], frame_shape=(100, 100))
+        out, alias_count = CompetitionPayloadSchema.canonicalize_objects(
+            [obj], frame_shape=(100, 100)
+        )
         self.assertEqual(alias_count, 1)
         self.assertEqual(len(out), 1)
         self.assertIn("motion_status", out[0])
@@ -849,9 +1007,16 @@ class _FakeNetwork:
         _FakeNetwork.download_calls += 1
         return np.zeros((8, 8, 3), dtype=np.uint8)
 
-    def send_result(self, frame_id, detected_objects, detected_translation,
-                    frame_data=None, frame_shape=None, degrade=False,
-                    detected_undefined_objects=None):
+    def send_result(
+        self,
+        frame_id,
+        detected_objects,
+        detected_translation,
+        frame_data=None,
+        frame_shape=None,
+        degrade=False,
+        detected_undefined_objects=None,
+    ):
         _FakeNetwork.send_calls += 1
         return SendResultStatus.ACKED
 
@@ -864,16 +1029,20 @@ class _Task3RefNetwork(_FakeNetwork):
 
 
 @unittest.skipUnless(
-    np is not None and FrameFetchResult is not None
-    and FrameFetchStatus is not None and SendResultStatus is not None
+    np is not None
+    and FrameFetchResult is not None
+    and FrameFetchStatus is not None
+    and SendResultStatus is not None
     and main_module is not None,
     "runtime deps missing",
 )
 class TestCompetitionLoopHardening(unittest.TestCase):
     def setUp(self):
         self._orig = {
-            "DEBUG": Settings.DEBUG, "MAX_FRAMES": Settings.MAX_FRAMES,
-            "LOOP_DELAY": Settings.LOOP_DELAY, "FPS_REPORT_INTERVAL": Settings.FPS_REPORT_INTERVAL,
+            "DEBUG": Settings.DEBUG,
+            "MAX_FRAMES": Settings.MAX_FRAMES,
+            "LOOP_DELAY": Settings.LOOP_DELAY,
+            "FPS_REPORT_INTERVAL": Settings.FPS_REPORT_INTERVAL,
             "DEGRADE_FETCH_ONLY_ENABLED": Settings.DEGRADE_FETCH_ONLY_ENABLED,
             "CB_SESSION_MAX_TRANSIENT_SEC": Settings.CB_SESSION_MAX_TRANSIENT_SEC,
             "CB_TRANSIENT_WINDOW_SEC": Settings.CB_TRANSIENT_WINDOW_SEC,
@@ -904,16 +1073,22 @@ class TestCompetitionLoopHardening(unittest.TestCase):
     def test_duplicate_frame_dropped_before_processing(self):
         fd = {"frame_id": "f1", "frame_url": "/f1.jpg", "gps_health": 1}
         _FakeNetwork.frame_results = [
-            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd, is_duplicate=False),
-            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd, is_duplicate=True),
+            FrameFetchResult(
+                status=FrameFetchStatus.OK, frame_data=fd, is_duplicate=False
+            ),
+            FrameFetchResult(
+                status=FrameFetchStatus.OK, frame_data=fd, is_duplicate=True
+            ),
             FrameFetchResult(status=FrameFetchStatus.END_OF_STREAM),
         ]
         _FakeNetwork.timeout_snapshots = [{"fetch": 0, "image": 0, "submit": 0}] * 8
-        with patch("src.network.NetworkManager", _FakeNetwork), \
-             patch.object(main_module, "ObjectDetector", _DummyDetector), \
-             patch.object(main_module, "MovementEstimator", _DummyMovement), \
-             patch.object(main_module, "VisualOdometry", _DummyOdometry), \
-             patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+        with patch("src.network.NetworkManager", _FakeNetwork), patch.object(
+            main_module, "ObjectDetector", _DummyDetector
+        ), patch.object(main_module, "MovementEstimator", _DummyMovement), patch.object(
+            main_module, "VisualOdometry", _DummyOdometry
+        ), patch.object(
+            main_module, "_print_summary", side_effect=self._summary_cb
+        ):
             main_module.run_competition(main_module.Logger("Test"))
         self.assertEqual(_FakeNetwork.download_calls, 2)
         self.assertEqual(_FakeNetwork.send_calls, 2)
@@ -925,8 +1100,12 @@ class TestCompetitionLoopHardening(unittest.TestCase):
     def test_transient_fetch_timeout_recovers(self):
         fd2 = {"frame_id": "f2", "frame_url": "/f2.jpg", "gps_health": 1}
         _FakeNetwork.frame_results = [
-            FrameFetchResult(status=FrameFetchStatus.TRANSIENT_ERROR, error_type="retries_exhausted"),
-            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd2, is_duplicate=False),
+            FrameFetchResult(
+                status=FrameFetchStatus.TRANSIENT_ERROR, error_type="retries_exhausted"
+            ),
+            FrameFetchResult(
+                status=FrameFetchStatus.OK, frame_data=fd2, is_duplicate=False
+            ),
             FrameFetchResult(status=FrameFetchStatus.END_OF_STREAM),
         ]
         _FakeNetwork.timeout_snapshots = [
@@ -936,11 +1115,13 @@ class TestCompetitionLoopHardening(unittest.TestCase):
             {"fetch": 0, "image": 0, "submit": 0},
             {"fetch": 0, "image": 0, "submit": 0},
         ]
-        with patch("src.network.NetworkManager", _FakeNetwork), \
-             patch.object(main_module, "ObjectDetector", _DummyDetector), \
-             patch.object(main_module, "MovementEstimator", _DummyMovement), \
-             patch.object(main_module, "VisualOdometry", _DummyOdometry), \
-             patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+        with patch("src.network.NetworkManager", _FakeNetwork), patch.object(
+            main_module, "ObjectDetector", _DummyDetector
+        ), patch.object(main_module, "MovementEstimator", _DummyMovement), patch.object(
+            main_module, "VisualOdometry", _DummyOdometry
+        ), patch.object(
+            main_module, "_print_summary", side_effect=self._summary_cb
+        ):
             main_module.run_competition(main_module.Logger("Test"))
         self.assertEqual(_FakeNetwork.send_calls, 1)
         self.assertEqual(self.summary_calls[-1]["kpi_counters"]["timeout_fetch"], 1)
@@ -949,8 +1130,12 @@ class TestCompetitionLoopHardening(unittest.TestCase):
         fd1 = {"frame_id": "f1", "frame_url": "/f1.jpg", "gps_health": 1}
         fd2 = {"frame_id": "f2", "frame_url": "/f2.jpg", "gps_health": 1}
         _FakeNetwork.frame_results = [
-            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd1, is_duplicate=False),
-            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd2, is_duplicate=False),
+            FrameFetchResult(
+                status=FrameFetchStatus.OK, frame_data=fd1, is_duplicate=False
+            ),
+            FrameFetchResult(
+                status=FrameFetchStatus.OK, frame_data=fd2, is_duplicate=False
+            ),
             FrameFetchResult(status=FrameFetchStatus.END_OF_STREAM),
         ]
         _FakeNetwork.timeout_snapshots = [{"fetch": 0, "image": 0, "submit": 0}] * 10
@@ -969,12 +1154,15 @@ class TestCompetitionLoopHardening(unittest.TestCase):
             }
             return (None, False, (None, success_info), 0)
 
-        with patch("src.network.NetworkManager", _FakeNetwork), \
-             patch.object(main_module, "ObjectDetector", _DummyDetector), \
-             patch.object(main_module, "MovementEstimator", _DummyMovement), \
-             patch.object(main_module, "VisualOdometry", _DummyOdometry), \
-             patch.object(main_module, "_submit_competition_step", side_effect=mock_submit), \
-             patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+        with patch("src.network.NetworkManager", _FakeNetwork), patch.object(
+            main_module, "ObjectDetector", _DummyDetector
+        ), patch.object(main_module, "MovementEstimator", _DummyMovement), patch.object(
+            main_module, "VisualOdometry", _DummyOdometry
+        ), patch.object(
+            main_module, "_submit_competition_step", side_effect=mock_submit
+        ), patch.object(
+            main_module, "_print_summary", side_effect=self._summary_cb
+        ):
             main_module.run_competition(main_module.Logger("Test"))
         self.assertEqual(call_count[0], 2)
 
@@ -989,12 +1177,15 @@ class TestCompetitionLoopHardening(unittest.TestCase):
             {"object_id": 11, "image": np.ones((8, 8, 3), dtype=np.uint8)},
         ]
 
-        with patch("src.network.NetworkManager", _Task3RefNetwork), \
-             patch.object(main_module, "ObjectDetector", _DummyDetector), \
-             patch.object(main_module, "MovementEstimator", _DummyMovement), \
-             patch.object(main_module, "VisualOdometry", _DummyOdometry), \
-             patch("src.image_matcher.ImageMatcher") as mock_matcher_cls, \
-             patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+        with patch("src.network.NetworkManager", _Task3RefNetwork), patch.object(
+            main_module, "ObjectDetector", _DummyDetector
+        ), patch.object(main_module, "MovementEstimator", _DummyMovement), patch.object(
+            main_module, "VisualOdometry", _DummyOdometry
+        ), patch(
+            "src.image_matcher.ImageMatcher"
+        ) as mock_matcher_cls, patch.object(
+            main_module, "_print_summary", side_effect=self._summary_cb
+        ):
             matcher = mock_matcher_cls.return_value
             matcher.load_references_from_directory.return_value = 0
             matcher.load_references.side_effect = lambda refs: len(refs)
@@ -1008,7 +1199,9 @@ class TestCompetitionLoopHardening(unittest.TestCase):
         kpi = self.summary_calls[-1]["kpi_counters"]
         self.assertEqual(kpi["reference_validation_stats"]["duplicate"], 1)
         self.assertEqual(kpi["id_integrity_mode"], "degraded")
-        self.assertEqual(kpi["id_integrity_reason_code"], "duplicate_detected_safe_degrade")
+        self.assertEqual(
+            kpi["id_integrity_reason_code"], "duplicate_detected_safe_degrade"
+        )
 
 
 class _LatencyNet:
@@ -1102,7 +1295,11 @@ class TestGps0LatencyCompensation(unittest.TestCase):
             "frame_id": "f-lat-1",
             "frame_data": {"frame_id": "f-lat-1", "gps_health": gps_health},
             "detected_objects": [],
-            "detected_translation": {"translation_x": 10.0, "translation_y": 0.0, "translation_z": 2.0},
+            "detected_translation": {
+                "translation_x": 10.0,
+                "translation_y": 0.0,
+                "translation_z": 2.0,
+            },
             "position": {"x": 10.0, "y": 0.0, "z": 2.0},
             "base_position": {"x": 10.0, "y": 0.0, "z": 2.0},
             "frame_fetch_monotonic": 10.0,

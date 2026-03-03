@@ -1,5 +1,6 @@
 """TEKNOFEST Havacılıkta Yapay Zeka — Ana orkestrasyon.
-Simülasyon: datasets/ içinden kare yükler. Yarışma: sunucudan frame alır, sonuç gönderir."""
+Simülasyon: datasets/ içinden kare yükler. Yarışma: sunucudan frame alır, sonuç gönderir.
+"""
 
 import argparse
 import base64
@@ -46,10 +47,10 @@ BANNER = """
 """
 
 
-def print_system_info(log: Logger, simulate: bool = False) -> None:
+def print_system_info(log: Logger, runtime_mode_label: str) -> None:
     print(BANNER)
     log.info(f"Working Directory : {PROJECT_ROOT}")
-    log.info(f"Mode             : {'SIMULATION' if simulate else 'COMPETITION'}")
+    log.info(f"Mode             : {runtime_mode_label}")
     log.info(f"Debug            : {'ON' if Settings.DEBUG else 'OFF'}")
     log.info(f"Model            : {Settings.MODEL_PATH}")
     log.info(f"Device           : {Settings.DEVICE}")
@@ -109,10 +110,13 @@ def run_simulation(
         image_matcher = None
         if Settings.TASK3_ENABLED:
             from src.image_matcher import ImageMatcher
+
             image_matcher = ImageMatcher()
             loaded = image_matcher.load_references_from_directory()
             if loaded == 0:
-                log.warn("Görev 3: Referans obje bulunamadı, Simülasyonda Görev 3 pasif")
+                log.warn(
+                    "Görev 3: Referans obje bulunamadı, Simülasyonda Görev 3 pasif"
+                )
                 image_matcher = None
 
         visualizer = Visualizer()
@@ -331,7 +335,11 @@ def _build_task3_reference_source(
             image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if image is None:
                 return None, "base64_decode_failed"
-            return {"object_id": object_id, "image": image, "label": label}, "image_base64"
+            return {
+                "object_id": object_id,
+                "image": image,
+                "label": label,
+            }, "image_base64"
         except (ValueError, TypeError):
             return None, "base64_decode_failed"
 
@@ -400,14 +408,11 @@ def _validate_task3_references(
         ref.pop("_source_kind", None)
 
     duplicate_ratio = (
-        float(stats["duplicate"]) / float(stats["total"])
-        if stats["total"] > 0
-        else 0.0
+        float(stats["duplicate"]) / float(stats["total"]) if stats["total"] > 0 else 0.0
     )
-    duplicate_critical = (
-        stats["duplicate"] >= int(Settings.TASK3_DUPLICATE_DEGRADE_MIN_COUNT)
-        and duplicate_ratio >= float(Settings.TASK3_DUPLICATE_DEGRADE_RATIO)
-    )
+    duplicate_critical = stats["duplicate"] >= int(
+        Settings.TASK3_DUPLICATE_DEGRADE_MIN_COUNT
+    ) and duplicate_ratio >= float(Settings.TASK3_DUPLICATE_DEGRADE_RATIO)
 
     if duplicate_critical:
         id_integrity_mode = "degraded"
@@ -463,20 +468,24 @@ def _apply_latency_compensation_if_needed(
     max_delta_m = max(0.0, _safe_float(Settings.LATENCY_COMP_MAX_DELTA_M))
 
     projection_base = dict(pending_result.get("base_position", base_position))
-    projected_position, applied_delta_m, used_dt_sec = odometry.project_position_with_latency(
-        position=projection_base,
-        dt_sec=dt_sec,
-        max_dt_sec=max_dt_sec,
-        max_delta_m=max_delta_m,
+    projected_position, applied_delta_m, used_dt_sec = (
+        odometry.project_position_with_latency(
+            position=projection_base,
+            dt_sec=dt_sec,
+            max_dt_sec=max_dt_sec,
+            max_delta_m=max_delta_m,
+        )
     )
 
     if applied_delta_m <= 0.0:
         return base_translation, base_position
 
-    kpi_counters["compensation_apply_count"] = int(kpi_counters.get("compensation_apply_count", 0)) + 1
-    kpi_counters["compensation_sum_delta_m"] = _safe_float(
-        kpi_counters.get("compensation_sum_delta_m", 0.0)
-    ) + applied_delta_m
+    kpi_counters["compensation_apply_count"] = (
+        int(kpi_counters.get("compensation_apply_count", 0)) + 1
+    )
+    kpi_counters["compensation_sum_delta_m"] = (
+        _safe_float(kpi_counters.get("compensation_sum_delta_m", 0.0)) + applied_delta_m
+    )
     apply_count = max(1, int(kpi_counters["compensation_apply_count"]))
     kpi_counters["compensation_avg_delta_m"] = (
         _safe_float(kpi_counters["compensation_sum_delta_m"]) / apply_count
@@ -515,10 +524,13 @@ def run_competition(log: Logger) -> None:
         image_matcher = None
         if Settings.TASK3_ENABLED:
             from src.image_matcher import ImageMatcher
+
             image_matcher = ImageMatcher()
             loaded = image_matcher.load_references_from_directory()
             if loaded == 0:
-                log.warn("Görev 3: Referans obje bulunamadı, detected_undefined_objects boş gönderilecek")
+                log.warn(
+                    "Görev 3: Referans obje bulunamadı, detected_undefined_objects boş gönderilecek"
+                )
 
         visualizer: Optional[Visualizer] = Visualizer() if Settings.DEBUG else None
 
@@ -566,7 +578,9 @@ def run_competition(log: Logger) -> None:
         elif canonical_refs:
             loaded = image_matcher.load_references(canonical_refs)
             if loaded == 0:
-                log.warn("Görev 3: Doğrulanan referanslar yüklense de matcher aktifleşmedi")
+                log.warn(
+                    "Görev 3: Doğrulanan referanslar yüklense de matcher aktifleşmedi"
+                )
             else:
                 log.info(
                     f"Görev 3: Sunucudan {loaded} canonical referans obje yüklendi"
@@ -651,9 +665,16 @@ def run_competition(log: Logger) -> None:
                 if pending_result is not None and submit_future is None:
                     submit_future = executor.submit(
                         _submit_competition_step,
-                        log, network, resilience, odometry, kpi_counters, pending_result,
-                        ack_failures, ack_failure_budget,
-                        consecutive_permanent_rejects, PERMANENT_REJECT_ABORT_THRESHOLD,
+                        log,
+                        network,
+                        resilience,
+                        odometry,
+                        kpi_counters,
+                        pending_result,
+                        ack_failures,
+                        ack_failure_budget,
+                        consecutive_permanent_rejects,
+                        PERMANENT_REJECT_ABORT_THRESHOLD,
                     )
 
                 if submit_future is not None and submit_future.done():
@@ -668,7 +689,9 @@ def run_competition(log: Logger) -> None:
                     elif action_result == "continue":
                         continue
 
-                    if not (isinstance(action_result, tuple) and len(action_result) == 2):
+                    if not (
+                        isinstance(action_result, tuple) and len(action_result) == 2
+                    ):
                         log.error(
                             f"Unexpected action_result type: {type(action_result)}, skipping frame"
                         )
@@ -682,7 +705,11 @@ def run_competition(log: Logger) -> None:
                     else:
                         kpi_counters["mode_of"] += 1
 
-                    if Settings.DEBUG and visualizer is not None and success_info["frame_for_debug"] is not None:
+                    if (
+                        Settings.DEBUG
+                        and visualizer is not None
+                        and success_info["frame_for_debug"] is not None
+                    ):
                         visualizer.draw_detections(
                             success_info["frame_for_debug"],
                             success_info["detected_objects"],
@@ -715,8 +742,16 @@ def run_competition(log: Logger) -> None:
                     if fetch_future is None:
                         fetch_future = executor.submit(
                             _fetch_competition_step,
-                            log, network, detector, movement, odometry, image_matcher,
-                            resilience, kpi_counters,                             transient_failures, transient_budget
+                            log,
+                            network,
+                            detector,
+                            movement,
+                            odometry,
+                            image_matcher,
+                            resilience,
+                            kpi_counters,
+                            transient_failures,
+                            transient_budget,
                         )
 
                     if fetch_future.done():
@@ -735,8 +770,13 @@ def run_competition(log: Logger) -> None:
                             break
                         if is_dup:
                             consecutive_duplicate_frames += 1
-                            if consecutive_duplicate_frames >= CONSECUTIVE_DUPLICATE_ABORT_THRESHOLD:
-                                kpi_counters["consecutive_duplicate_abort"] = consecutive_duplicate_frames
+                            if (
+                                consecutive_duplicate_frames
+                                >= CONSECUTIVE_DUPLICATE_ABORT_THRESHOLD
+                            ):
+                                kpi_counters["consecutive_duplicate_abort"] = (
+                                    consecutive_duplicate_frames
+                                )
                                 log.error(
                                     f"Ardışık {consecutive_duplicate_frames} duplicate frame, "
                                     "oturum sonlandırılıyor"
@@ -753,10 +793,10 @@ def run_competition(log: Logger) -> None:
                 log.warn("Interrupted by user")
                 break
             except (requests.Timeout, requests.ConnectionError) as exc:
-                decision = error_policy.decide_on_error(
-                    RecoverableIOError(str(exc))
+                decision = error_policy.decide_on_error(RecoverableIOError(str(exc)))
+                log.warn(
+                    f"event=error_decision decision={decision.value} type={type(exc).__name__}"
                 )
-                log.warn(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
                 if decision == ErrorDecision.RETRY:
                     kpi_counters["error_decision_retry"] += 1
                     time.sleep(0.2)
@@ -768,10 +808,10 @@ def run_competition(log: Logger) -> None:
                 kpi_counters["error_decision_stop"] += 1
                 break
             except (ValueError, KeyError, TypeError) as exc:
-                decision = error_policy.decide_on_error(
-                    DataContractError(str(exc))
+                decision = error_policy.decide_on_error(DataContractError(str(exc)))
+                log.error(
+                    f"event=error_decision decision={decision.value} type={type(exc).__name__}"
                 )
-                log.error(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
                 if decision == ErrorDecision.DEGRADE:
                     kpi_counters["error_decision_degrade"] += 1
                     time.sleep(0.2)
@@ -779,10 +819,10 @@ def run_competition(log: Logger) -> None:
                 kpi_counters["error_decision_stop"] += 1
                 break
             except (RuntimeError, OSError, MemoryError) as exc:
-                decision = error_policy.decide_on_error(
-                    FatalSystemError(str(exc))
+                decision = error_policy.decide_on_error(FatalSystemError(str(exc)))
+                log.error(
+                    f"event=error_decision decision={decision.value} type={type(exc).__name__}"
                 )
-                log.error(f"event=error_decision decision={decision.value} type={type(exc).__name__}")
                 kpi_counters["error_decision_stop"] += 1
                 break
             except Exception as exc:
@@ -841,7 +881,9 @@ def _print_competition_result(
     y = _safe_float(position.get("y", 0.0))
     z = _safe_float(position.get("z", 0.0))
 
-    send_status_text = "OK" if send_status in {"acked", "fallback_acked", "SUCCESS"} else "FAIL"
+    send_status_text = (
+        "OK" if send_status in {"acked", "fallback_acked", "SUCCESS"} else "FAIL"
+    )
     log.info(
         f"Frame: {frame_id} | Obj: {len(detected_objects)} | "
         f"Send: {send_status_text} ({send_status}) | Mode: {mode} | "
@@ -975,9 +1017,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TEKNOFEST AIA Runtime")
     parser.add_argument(
         "--mode",
-        choices=["competition", "simulate_vid", "simulate_det"],
-        default="competition",
-        help="Run mode (default: competition)",
+        choices=[
+            Settings.COMPETITION_RUNTIME_MODE,
+            Settings.VISUAL_VALIDATION_RUNTIME_MODE,
+            "simulate_vid",
+            "simulate_det",
+        ],
+        default=Settings.DEFAULT_RUNTIME_MODE,
+        help=(
+            "Run mode. competition=competition workflow, "
+            "visual_validation=human-checkable validation mode (default). "
+            "simulate_vid/simulate_det are backward-compatible aliases."
+        ),
     )
     parser.add_argument(
         "--interactive",
@@ -1004,8 +1055,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--show", action="store_true", help="Show simulation window")
     parser.add_argument("--save", action="store_true", help="Save simulation images")
-    parser.add_argument("--seed", type=int, default=None, help="Deterministik simülasyon için rastgele seed")
-    parser.add_argument("--sequence", type=str, default=None, help="VID modunda seçilecek sekans adı (örn. uav0000123)")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Deterministik simülasyon için rastgele seed",
+    )
+    parser.add_argument(
+        "--sequence",
+        type=str,
+        default=None,
+        help="VID modunda seçilecek sekans adı (örn. uav0000123)",
+    )
     return parser.parse_args()
 
 
@@ -1036,7 +1097,7 @@ def main() -> None:
 
     requested_profile = args.deterministic_profile
     effective_profile = requested_profile
-    if args.mode == "competition" and requested_profile != "max":
+    if args.mode == Settings.COMPETITION_RUNTIME_MODE and requested_profile != "max":
         log.warn(
             "Competition mode requires deterministic-profile=max; "
             f"overriding requested profile '{requested_profile}' -> 'max'"
@@ -1050,18 +1111,23 @@ def main() -> None:
     if args.interactive:
         choices = show_interactive_menu()
     else:
-        if args.mode == "competition":
+        if args.mode == Settings.COMPETITION_RUNTIME_MODE:
             choices = {
                 "mode": "competition",
                 "prefer_vid": True,
                 "show": False,
                 "save": False,
             }
-        elif args.mode == "simulate_vid":
+        elif args.mode in {Settings.VISUAL_VALIDATION_RUNTIME_MODE, "simulate_vid"}:
             choices = {
                 "mode": "simulate",
                 "prefer_vid": True,
-                "show": args.show,
+                "show": (
+                    True
+                    if args.mode == Settings.VISUAL_VALIDATION_RUNTIME_MODE
+                    and not args.save
+                    else args.show
+                ),
                 "save": args.save,
             }
         else:
@@ -1073,7 +1139,8 @@ def main() -> None:
             }
 
     simulate = choices["mode"] == "simulate"
-    print_system_info(log, simulate=simulate)
+    runtime_mode_label = "VISUAL_VALIDATION" if simulate else "COMPETITION"
+    print_system_info(log, runtime_mode_label=runtime_mode_label)
 
     if simulate:
         run_simulation(
@@ -1089,8 +1156,16 @@ def main() -> None:
 
 
 def _fetch_competition_step(
-    log: Logger, network: Any, detector: Any, movement: Any, odometry: Any, image_matcher: Any,
-    resilience: Any, kpi_counters: dict, transient_failures: int, transient_budget: int
+    log: Logger,
+    network: Any,
+    detector: Any,
+    movement: Any,
+    odometry: Any,
+    image_matcher: Any,
+    resilience: Any,
+    kpi_counters: dict,
+    transient_failures: int,
+    transient_budget: int,
 ):
     from src.network import FrameFetchStatus
     import time
@@ -1098,7 +1173,9 @@ def _fetch_competition_step(
     if not resilience.before_fetch():
         cooldown_left = resilience.open_cooldown_remaining()
         wait_s = min(max(0.2, Settings.RETRY_DELAY), max(0.2, cooldown_left))
-        log.warn(f"Circuit breaker OPEN; waiting cooldown ({cooldown_left:.1f}s remaining, sleep={wait_s:.1f}s)")
+        log.warn(
+            f"Circuit breaker OPEN; waiting cooldown ({cooldown_left:.1f}s remaining, sleep={wait_s:.1f}s)"
+        )
         return None, transient_failures, "continue", False
 
     fetch_result = network.get_frame()
@@ -1115,14 +1192,20 @@ def _fetch_competition_step(
         transient_failures += 1
         resilience.on_fetch_transient()
         delay = min(5.0, Settings.RETRY_DELAY * (2 ** min(transient_failures, 4)))
-        log.warn(f"Transient frame fetch failure {transient_failures}/{transient_budget}; retrying in {delay:.1f}s")
+        log.warn(
+            f"Transient frame fetch failure {transient_failures}/{transient_budget}; retrying in {delay:.1f}s"
+        )
         if transient_failures >= transient_budget:
-            log.warn("Transient failure budget reached; session stays alive under wall-clock circuit breaker policy")
+            log.warn(
+                "Transient failure budget reached; session stays alive under wall-clock circuit breaker policy"
+            )
         time.sleep(delay)
         return None, transient_failures, "continue", False
 
     if fetch_result.status == FrameFetchStatus.FATAL_ERROR:
-        log.error(f"Fatal frame fetch error: {fetch_result.error_type} (http={fetch_result.http_status})")
+        log.error(
+            f"Fatal frame fetch error: {fetch_result.error_type} (http={fetch_result.http_status})"
+        )
         return None, transient_failures, "break", False
 
     frame_data = fetch_result.frame_data or {}
@@ -1133,7 +1216,9 @@ def _fetch_competition_step(
 
     if fetch_result.is_duplicate:
         kpi_counters["frame_duplicate_drop"] += 1
-        log.warn(f"Frame {frame_id}: duplicate metadata detected. Processing normally per specification idempotency.")
+        log.warn(
+            f"Frame {frame_id}: duplicate metadata detected. Processing normally per specification idempotency."
+        )
 
     frame = None
     use_fallback = False
@@ -1151,12 +1236,18 @@ def _fetch_competition_step(
             kpi_counters["timeout_submit"] += timeout_snapshot.get("submit", 0)
             if frame is None:
                 use_fallback = True
-                log.warn(f"Frame {frame_id}: degrade heavy pass image download failed, sending fallback result")
+                log.warn(
+                    f"Frame {frame_id}: degrade heavy pass image download failed, sending fallback result"
+                )
             else:
-                log.info(f"Frame {frame_id}: degrade heavy pass (every {heavy_every} frames)")
+                log.info(
+                    f"Frame {frame_id}: degrade heavy pass (every {heavy_every} frames)"
+                )
         else:
             use_fallback = True
-            log.info(f"Frame {frame_id}: degraded fetch-only fallback (slot {degrade_seq}/{heavy_every})")
+            log.info(
+                f"Frame {frame_id}: degraded fetch-only fallback (slot {degrade_seq}/{heavy_every})"
+            )
     else:
         frame = network.download_image(frame_data)
         timeout_snapshot = network.consume_timeout_counters()
@@ -1165,7 +1256,9 @@ def _fetch_competition_step(
         kpi_counters["timeout_submit"] += timeout_snapshot.get("submit", 0)
         if frame is None:
             use_fallback = True
-            log.warn(f"Frame {frame_id}: image download failed, sending fallback result")
+            log.warn(
+                f"Frame {frame_id}: image download failed, sending fallback result"
+            )
 
     if use_fallback:
         gps_health = int(float(frame_data.get("gps_health", 0)))
@@ -1190,9 +1283,13 @@ def _fetch_competition_step(
             }
         )
         pending_result = {
-            "frame_id": frame_id, "frame_data": frame_data, "detected_objects": [],
-            "frame": None, "position": last_position,
-            "degraded": degrade_mode, "pending_ttl": 1 if degrade_mode else None,
+            "frame_id": frame_id,
+            "frame_data": frame_data,
+            "detected_objects": [],
+            "frame": None,
+            "position": last_position,
+            "degraded": degrade_mode,
+            "pending_ttl": 1 if degrade_mode else None,
             "detected_translation": {
                 "translation_x": last_position["x"],
                 "translation_y": last_position["y"],
@@ -1201,7 +1298,8 @@ def _fetch_competition_step(
             "localization_runtime": runtime_meta,
             "base_position": dict(last_position),
             "frame_fetch_monotonic": frame_fetch_monotonic,
-            "frame_shape": None, "detected_undefined_objects": [],
+            "frame_shape": None,
+            "detected_undefined_objects": [],
             "is_duplicate": fetch_result.is_duplicate,
         }
     else:
@@ -1223,8 +1321,12 @@ def _fetch_competition_step(
             }
         )
         pending_result = {
-            "frame_id": frame_id, "frame_data": frame_data, "detected_objects": detected_objects,
-            "frame": frame, "position": position, "degraded": degrade_mode,
+            "frame_id": frame_id,
+            "frame_data": frame_data,
+            "detected_objects": detected_objects,
+            "frame": frame,
+            "position": position,
+            "degraded": degrade_mode,
             "pending_ttl": 1 if degrade_mode else None,
             "detected_translation": {
                 "translation_x": position["x"],
@@ -1234,7 +1336,8 @@ def _fetch_competition_step(
             "localization_runtime": runtime_meta,
             "base_position": dict(position),
             "frame_fetch_monotonic": frame_fetch_monotonic,
-            "frame_shape": frame.shape, "detected_undefined_objects": undefined_objects,
+            "frame_shape": frame.shape,
+            "detected_undefined_objects": undefined_objects,
             "is_duplicate": fetch_result.is_duplicate,
         }
 
@@ -1242,11 +1345,19 @@ def _fetch_competition_step(
 
 
 def _submit_competition_step(
-    log: Logger, network: Any, resilience: Any, odometry: VisualOdometry, kpi_counters: dict, pending_result: dict,
-    ack_failures: int, ack_failure_budget: int,
-    consecutive_permanent_rejects: int, permanent_reject_abort_threshold: int,
+    log: Logger,
+    network: Any,
+    resilience: Any,
+    odometry: VisualOdometry,
+    kpi_counters: dict,
+    pending_result: dict,
+    ack_failures: int,
+    ack_failure_budget: int,
+    consecutive_permanent_rejects: int,
+    permanent_reject_abort_threshold: int,
 ):
     import time
+
     required_keys = {
         "frame_id",
         "frame_data",
@@ -1256,9 +1367,7 @@ def _submit_competition_step(
     }
     missing = required_keys - set(pending_result.keys())
     if missing:
-        raise DataContractError(
-            f"pending_result missing keys: {sorted(list(missing))}"
-        )
+        raise DataContractError(f"pending_result missing keys: {sorted(list(missing))}")
 
     frame_id = pending_result["frame_id"]
     frame_data = pending_result["frame_data"]
@@ -1271,8 +1380,11 @@ def _submit_competition_step(
     )
 
     send_status = network.send_result(
-        frame_id, detected_objects, detected_translation,
-        frame_data=frame_data, frame_shape=pending_result["frame_shape"],
+        frame_id,
+        detected_objects,
+        detected_translation,
+        frame_data=frame_data,
+        frame_shape=pending_result["frame_shape"],
         degrade=bool(pending_result.get("degraded", False)),
         detected_undefined_objects=pending_result.get("detected_undefined_objects"),
     )
@@ -1283,13 +1395,17 @@ def _submit_competition_step(
     kpi_counters["timeout_submit"] += timeout_snapshot.get("submit", 0)
 
     guard_snapshot = network.consume_payload_guard_counters()
-    kpi_counters["payload_preflight_reject_count"] += guard_snapshot.get("preflight_reject", 0)
+    kpi_counters["payload_preflight_reject_count"] += guard_snapshot.get(
+        "preflight_reject", 0
+    )
     kpi_counters["payload_clipped_count"] += guard_snapshot.get("payload_clipped", 0)
 
     pending_result_snapshot = dict(pending_result)
 
     pending_result, should_abort_session, success_cycle = apply_send_result_status(
-        send_status=send_status, pending_result=pending_result, kpi_counters=kpi_counters,
+        send_status=send_status,
+        pending_result=pending_result,
+        kpi_counters=kpi_counters,
     )
 
     if pending_result is None and not success_cycle:
@@ -1299,7 +1415,9 @@ def _submit_competition_step(
             f"({consecutive_permanent_rejects}/{permanent_reject_abort_threshold})"
         )
         if consecutive_permanent_rejects >= permanent_reject_abort_threshold:
-            log.error("Consecutive permanent reject threshold reached, aborting session")
+            log.error(
+                "Consecutive permanent reject threshold reached, aborting session"
+            )
             return None, ack_failures, "break", consecutive_permanent_rejects
         return None, ack_failures, "continue", consecutive_permanent_rejects
 
@@ -1313,9 +1431,14 @@ def _submit_competition_step(
             "detected_objects": detected_objects,
             "position": pending_result_snapshot.get("position"),
             "frame_id": frame_id,
-            "frame_data": frame_data
+            "frame_data": frame_data,
         }
-        return pending_result, ack_failures, ("process", success_info), consecutive_permanent_rejects
+        return (
+            pending_result,
+            ack_failures,
+            ("process", success_info),
+            consecutive_permanent_rejects,
+        )
     else:
         ack_failures += 1
         resilience.on_ack_failure()
