@@ -349,6 +349,7 @@ class VisualOdometry:
         self.position["z"] = float(self._last_gps_altitude)
 
         self._last_of_position = {k: v for k, v in self.position.items()}
+        dz_meters = 0.0  # Z ekseni sabitlendiği için dZ = 0 sayıyoruz
 
         self.log.debug(
             f"Optik Akış → dX:{dx_meters:.3f}m dY:{dy_meters:.3f}m dZ:{dz_meters:.3f}m | "
