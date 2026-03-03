@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -19,7 +20,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from config.settings import Settings  # noqa: E402
+from config.settings import Settings, apply_mode_profile  # noqa: E402
 from src.detection import ObjectDetector  # noqa: E402
 from src.localization import VisualOdometry  # noqa: E402
 from src.movement import MovementEstimator  # noqa: E402
@@ -44,6 +45,25 @@ BANNER = """
 ║     Görüntü Eşleme (Görev 3)                                ║
 ╚══════════════════════════════════════════════════════════════╝
 """
+
+
+@dataclass(frozen=True)
+class ModePolicy:
+    """Çalışma modu için runtime debug izin katmanı."""
+
+    profile_name: str
+    allow_window_output: bool
+    allow_debug_save: bool
+
+
+def resolve_mode_policy(mode: str) -> ModePolicy:
+    profile_name = "competition" if mode == "competition" else "visual_validation"
+    apply_mode_profile(profile_name)
+    return ModePolicy(
+        profile_name=profile_name,
+        allow_window_output=bool(Settings.VISUAL_DEBUG_WINDOW_ALLOWED),
+        allow_debug_save=bool(Settings.VISUAL_DEBUG_SAVE_ALLOWED),
+    )
 
 
 def print_system_info(log: Logger, simulate: bool = False) -> None:
@@ -1033,6 +1053,7 @@ def main() -> None:
     log = Logger("Main")
     args = parse_args()
     apply_runtime_overrides(args, log)
+    mode_policy = resolve_mode_policy(args.mode)
 
     requested_profile = args.deterministic_profile
     effective_profile = requested_profile
@@ -1044,6 +1065,13 @@ def main() -> None:
         effective_profile = "max"
 
     apply_runtime_profile(effective_profile, requested_profile=requested_profile)
+
+    log.info(
+        "Mode policy applied: "
+        f"profile={mode_policy.profile_name} "
+        f"window_output={'ON' if mode_policy.allow_window_output else 'OFF'} "
+        f"debug_save={'ON' if mode_policy.allow_debug_save else 'OFF'}"
+    )
 
     print(BANNER)
 
@@ -1073,6 +1101,11 @@ def main() -> None:
             }
 
     simulate = choices["mode"] == "simulate"
+    if not mode_policy.allow_window_output:
+        choices["show"] = False
+    if not mode_policy.allow_debug_save:
+        choices["save"] = False
+
     print_system_info(log, simulate=simulate)
 
     if simulate:

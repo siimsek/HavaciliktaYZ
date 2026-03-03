@@ -18,6 +18,18 @@ Sistem, istenen saniyede 1 FPS işlemini `concurrent.futures` üzerinden asenkro
 ### Görev 3 (Görüntü Eşleme)
 *   Sunucudan alınan anlık JSON nesnelerinden (base64 veya path üzerinden) `image_matcher.py` aracılığıyla SIFT/ORB feature (anahtar nokta) çıkarımı yapılarak sahada `knnMatch` uygulanmaktadır. Referansların tamamının sahnede olmama ihtimali (fallback/threshold kullanımıyla) şartnameye uygun şekilde denetlenmiştir.
 
+### Operasyon Modları
+
+#### Competition Modu
+- **Amaç:** Yarışma süresince sadece gerekli tespit/lokalizasyon çıktılarının sunucuya güvenli şekilde aktarılması.
+- **İzinli Özellikler:** Frame fetch/download, inference, contract kontrollü submit, KPI loglama.
+- **Çıktılar:** Konsol logları ve JSON submit trafiği; görsel pencere ve debug kare kaydı policy gereği kapalıdır.
+
+#### Visual Validation Modu
+- **Amaç:** Yarışma öncesi doğrulama ve operatör gözlemi ile model davranışını hızla incelemek.
+- **İzinli Özellikler:** Simülasyon akışı, görsel pencere (`--show`), disk kaydı (`--save`), detaylı debug.
+- **Çıktılar:** Konsol logları + gerçek zamanlı anotasyonlu pencere ve/veya `debug_output/` görselleri.
+
 ### Rekabet Döngüsü ve Payload Mimarisi
 *   Sistem bir kare için yalnızca **1 sonuç** gönderimi limitini idempotency kilitleri ve `assert_contract_ready` gibi veri kontrat güvenceleri ile savunmaktadır. Çökmelere karşı `SessionResilienceController` üzerinden Circuit Breaker mimarisi uygulanmıştır.
 
