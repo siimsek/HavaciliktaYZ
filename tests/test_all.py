@@ -731,6 +731,8 @@ class TestNetworkPayloadGuard(unittest.TestCase):
             frame_data={"id": "f-4", "user": "u", "url": "frame-url"}, frame_shape=(1080, 1920, 3),
         )
         self.assertEqual(status, SendResultStatus.FALLBACK_ACKED)
+        counters = self.net.consume_fallback_counters()
+        self.assertEqual(counters["recovered_after_4xx"], 1)
 
     def test_4xx_then_fallback_4xx_returns_permanent_rejected(self):
         self.net.session = Mock()
@@ -741,6 +743,15 @@ class TestNetworkPayloadGuard(unittest.TestCase):
             frame_data={"id": "f-5", "user": "u", "url": "frame-url"}, frame_shape=(1080, 1920, 3),
         )
         self.assertEqual(status, SendResultStatus.PERMANENT_REJECTED)
+        counters = self.net.consume_fallback_counters()
+        self.assertEqual(counters["fallback_rejected_4xx"], 1)
+
+    def test_download_image_failure_meta_marks_permanent_on_missing_url(self):
+        frame = self.net.download_image({"frame_id": "f-missing"})
+        self.assertIsNone(frame)
+        meta = self.net.get_last_image_failure()
+        self.assertTrue(meta["is_permanent"])
+        self.assertFalse(meta["is_transient"])
 
     def test_5xx_retries_exhausted_returns_retryable_failure(self):
         self.net.session = Mock()
@@ -1082,6 +1093,85 @@ class _LatencyOdometry:
             "z": position["z"],
         }
         return projected, delta, dt_used
+
+
+@unittest.skipUnless(main_module is not None and FrameFetchResult is not None, "main runtime missing")
+class TestFetchCarryForward(unittest.TestCase):
+    class _Net:
+        def __init__(self):
+            self.calls = 0
+
+        def get_frame(self):
+            return FrameFetchResult(
+                status=FrameFetchStatus.OK,
+                frame_data={"frame_id": f"f-{self.calls}", "frame_url": "/x.jpg", "gps_health": 1},
+            )
+
+        @staticmethod
+        def consume_timeout_counters():
+            return {"fetch": 0, "image": 0, "submit": 0}
+
+        def download_image(self, frame_data):
+            self.calls += 1
+            if self.calls == 1:
+                return np.zeros((8, 8, 3), dtype=np.uint8)
+            return None
+
+        @staticmethod
+        def get_last_image_failure():
+            return {"reason": "timeout", "is_transient": True, "is_permanent": False}
+
+    class _Resilience:
+        @staticmethod
+        def before_fetch():
+            return True
+
+        @staticmethod
+        def is_degraded():
+            return False
+
+        @staticmethod
+        def record_degraded_frame():
+            return 1
+
+        @staticmethod
+        def on_fetch_transient():
+            return None
+
+    class _Detector:
+        @staticmethod
+        def detect(frame):
+            return [{"cls": "0", "top_left_x": 1, "top_left_y": 1, "bottom_right_x": 2, "bottom_right_y": 2}]
+
+    class _Movement:
+        @staticmethod
+        def annotate(objs, frame_ctx=None):
+            return objs
+
+    class _Odometry:
+        @staticmethod
+        def update(frame_ctx, frame_data):
+            return {"x": 0.0, "y": 0.0, "z": 0.0}
+
+        @staticmethod
+        def get_position():
+            return {"x": 0.0, "y": 0.0, "z": 0.0}
+
+    def test_transient_visual_failure_uses_ttl1_carry_forward(self):
+        cache = {"objects": [], "ttl": 0, "source_frame_id": None}
+        kpi = {"timeout_fetch": 0, "timeout_image": 0, "timeout_submit": 0,
+               "frame_duplicate_drop": 0, "degrade_frames": 0,
+               "carry_forward_used": 0, "carry_forward_missed": 0,
+               "visual_unavailable_transient": 0, "visual_unavailable_permanent": 0}
+        net = self._Net()
+        common = [main_module.Logger("T"), net, self._Detector(), self._Movement(), self._Odometry(), None,
+                  self._Resilience(), kpi, 0, 3, cache]
+        first, *_ = main_module._fetch_competition_step(*common)
+        second, *_ = main_module._fetch_competition_step(*common)
+        self.assertEqual(len(first["detected_objects"]), 1)
+        self.assertEqual(len(second["detected_objects"]), 1)
+        self.assertTrue(second["detected_objects"][0].get("_carry_forward", False))
+        self.assertEqual(kpi["carry_forward_used"], 1)
 
 
 @unittest.skipUnless(main_module is not None, "main runtime missing")

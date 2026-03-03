@@ -71,6 +71,18 @@ class NetworkManager:
             "preflight_reject": 0,
             "payload_clipped": 0,
         }
+        self._fallback_counters: Dict[str, int] = {
+            "forced_by_preflight_reject": 0,
+            "forced_by_lru_guard": 0,
+            "recovered_after_4xx": 0,
+            "fallback_rejected_4xx": 0,
+            "fallback_retryable_failure": 0,
+        }
+        self._last_image_failure: Dict[str, Any] = {
+            "reason": "",
+            "is_transient": False,
+            "is_permanent": False,
+        }
         self._clip_ratio_window: Deque[int] = deque(maxlen=100)
         self._clip_frame_events: List[Dict[str, Any]] = []
         self._clip_aggregate_stats: Dict[str, Any] = {
@@ -246,9 +258,20 @@ class NetworkManager:
         if self.simulation_mode:
             return self._load_simulation_image()
 
+        self._last_image_failure = {
+            "reason": "",
+            "is_transient": False,
+            "is_permanent": False,
+        }
+
         frame_url = frame_data.get("frame_url", "") or frame_data.get("image_url", "")
         if not frame_url:
             self.log.error("Frame URL is missing in frame metadata")
+            self._last_image_failure = {
+                "reason": "missing_frame_url",
+                "is_transient": False,
+                "is_permanent": True,
+            }
             return None
 
         frame_url_str = str(frame_url).strip()
@@ -280,6 +303,11 @@ class NetworkManager:
                     frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                     if frame is None:
                         self.log.error("Image decode failed")
+                        self._last_image_failure = {
+                            "reason": "decode_failed",
+                            "is_transient": False,
+                            "is_permanent": True,
+                        }
                         return None
                     self.log.debug(
                         f"Image downloaded: {frame.shape[1]}x{frame.shape[0]}"
@@ -287,17 +315,45 @@ class NetworkManager:
                     return frame
 
                 self.log.warn(f"Image download HTTP {response.status_code}")
+                if 400 <= response.status_code < 500:
+                    self._last_image_failure = {
+                        "reason": f"http_{response.status_code}",
+                        "is_transient": False,
+                        "is_permanent": True,
+                    }
+                    return None
+                self._last_image_failure = {
+                    "reason": f"http_{response.status_code}",
+                    "is_transient": True,
+                    "is_permanent": False,
+                }
             except requests.Timeout:
                 self._increment_timeout_counter("image")
+                self._last_image_failure = {
+                    "reason": "timeout",
+                    "is_transient": True,
+                    "is_permanent": False,
+                }
                 self.log.warn(
                     f"Image download timeout attempt {attempt}/{Settings.MAX_RETRIES}"
                 )
             except Exception as exc:
+                self._last_image_failure = {
+                    "reason": f"exception_{type(exc).__name__}",
+                    "is_transient": True,
+                    "is_permanent": False,
+                }
                 self.log.warn(f"Image download transient error: {exc}")
 
             self._sleep_with_backoff(attempt)
 
         self.log.error("Image download failed after all retries")
+        if not self._last_image_failure.get("reason"):
+            self._last_image_failure = {
+                "reason": "retries_exhausted",
+                "is_transient": True,
+                "is_permanent": False,
+            }
         return None
 
     def send_result(
@@ -328,6 +384,7 @@ class NetworkManager:
             payload = self._build_safe_fallback_payload(raw_payload)
             preflight_rejected = True
             payload_clipped = False
+            self._increment_fallback_counter("forced_by_lru_guard")
         else:
             payload, preflight_rejected, payload_clipped = (
                 self._preflight_validate_and_normalize_payload(
@@ -340,6 +397,7 @@ class NetworkManager:
         if preflight_rejected:
             self._payload_guard_counters["preflight_reject"] += 1
             self._mark_force_fallback(frame_key)
+            self._increment_fallback_counter("forced_by_preflight_reject")
         if payload_clipped:
             self._payload_guard_counters["payload_clipped"] += 1
         self._record_clip_event(payload_clipped)
@@ -436,25 +494,30 @@ class NetworkManager:
                     )
                     self._mark_submitted(frame_key)
                     self._unmark_force_fallback(frame_key)
+                    self._increment_fallback_counter("recovered_after_4xx")
                     return SendResultStatus.FALLBACK_ACKED
                 if 400 <= response.status_code < 500:
                     self.log.error(
                         f"Frame {frame_id}: fallback payload rejected with HTTP {response.status_code}"
                     )
+                    self._increment_fallback_counter("fallback_rejected_4xx")
                     return SendResultStatus.PERMANENT_REJECTED
 
                 self.log.warn(
                     f"Frame {frame_id}: fallback payload non-ACK HTTP {response.status_code}, retryable"
                 )
+                self._increment_fallback_counter("fallback_retryable_failure")
                 return SendResultStatus.RETRYABLE_FAILURE
             except requests.Timeout:
                 self._increment_timeout_counter("submit")
                 self.log.warn(f"Frame {frame_id}: fallback submit timeout, retryable")
+                self._increment_fallback_counter("fallback_retryable_failure")
                 return SendResultStatus.RETRYABLE_FAILURE
             except Exception as exc:
                 self.log.warn(
                     f"Frame {frame_id}: fallback submit transient error ({type(exc).__name__}): {exc}"
                 )
+                self._increment_fallback_counter("fallback_retryable_failure")
                 return SendResultStatus.RETRYABLE_FAILURE
 
         self.log.error(f"Result submission failed after retries for frame {frame_id}")
@@ -851,9 +914,21 @@ class NetworkManager:
         self._payload_guard_counters = dict.fromkeys(snapshot, 0)
         return snapshot
 
+    def consume_fallback_counters(self) -> Dict[str, int]:
+        snapshot = self._fallback_counters
+        self._fallback_counters = dict.fromkeys(snapshot, 0)
+        return snapshot
+
+    def get_last_image_failure(self) -> Dict[str, Any]:
+        return dict(self._last_image_failure)
+
     def _increment_timeout_counter(self, key: str) -> None:
         if key in self._timeout_counters:
             self._timeout_counters[key] += 1
+
+    def _increment_fallback_counter(self, reason: str) -> None:
+        if reason in self._fallback_counters:
+            self._fallback_counters[reason] += 1
 
     @staticmethod
     def _normalize_frame_key(frame_id: Any) -> str:

@@ -306,6 +306,23 @@ def _safe_gps_health(frame_data: Dict[str, Any]) -> int:
         return 0
 
 
+def _build_low_confidence_carry_forward(objects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    carry_objects: List[Dict[str, Any]] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        cloned = dict(obj)
+        cloned["_carry_forward"] = True
+        cloned["_carry_ttl"] = 1
+        if "_confidence" in cloned:
+            cloned["_confidence"] = min(
+                0.35,
+                max(0.05, _safe_float(cloned.get("_confidence"), 0.2) * 0.5),
+            )
+        carry_objects.append(cloned)
+    return carry_objects
+
+
 def _normalize_task3_object_id(raw_object_id: Any) -> Optional[int]:
     if isinstance(raw_object_id, bool) or raw_object_id is None:
         return None
@@ -637,8 +654,14 @@ def run_competition(log: Logger) -> None:
         "reference_validation_stats": reference_validation_stats,
         "id_integrity_mode": id_integrity_mode,
         "id_integrity_reason_code": id_integrity_reason_code,
+        "carry_forward_used": 0,
+        "carry_forward_missed": 0,
+        "visual_unavailable_transient": 0,
+        "visual_unavailable_permanent": 0,
+        "network_fallback_counters": {},
     }
     pending_result: Optional[Dict] = None
+    carry_forward_cache: Dict[str, Any] = {"objects": [], "ttl": 0, "source_frame_id": None}
 
     def signal_handler(sig, frame) -> None:
         nonlocal running
@@ -736,7 +759,8 @@ def run_competition(log: Logger) -> None:
                         fetch_future = executor.submit(
                             _fetch_competition_step,
                             log, network, detector, movement, odometry, image_matcher,
-                            resilience, kpi_counters,                             transient_failures, transient_budget
+                            resilience, kpi_counters, transient_failures, transient_budget,
+                            carry_forward_cache,
                         )
 
                     if fetch_future.done():
@@ -1140,7 +1164,8 @@ def main() -> None:
 
 def _fetch_competition_step(
     log: Logger, network: Any, detector: Any, movement: Any, odometry: Any, image_matcher: Any,
-    resilience: Any, kpi_counters: dict, transient_failures: int, transient_budget: int
+    resilience: Any, kpi_counters: dict, transient_failures: int, transient_budget: int,
+    carry_forward_cache: Dict[str, Any],
 ):
     from src.network import FrameFetchStatus
     import time
@@ -1188,6 +1213,9 @@ def _fetch_competition_step(
 
     frame = None
     use_fallback = False
+    visual_unavailable_reason = ""
+    visual_unavailable_transient = False
+    visual_unavailable_permanent = False
 
     if degrade_mode:
         kpi_counters["degrade_frames"] += 1
@@ -1202,6 +1230,7 @@ def _fetch_competition_step(
             kpi_counters["timeout_submit"] += timeout_snapshot.get("submit", 0)
             if frame is None:
                 use_fallback = True
+                visual_unavailable_reason = "image_download_failed"
                 log.warn(f"Frame {frame_id}: degrade heavy pass image download failed, sending fallback result")
             else:
                 log.info(f"Frame {frame_id}: degrade heavy pass (every {heavy_every} frames)")
@@ -1216,7 +1245,21 @@ def _fetch_competition_step(
         kpi_counters["timeout_submit"] += timeout_snapshot.get("submit", 0)
         if frame is None:
             use_fallback = True
+            visual_unavailable_reason = "image_download_failed"
             log.warn(f"Frame {frame_id}: image download failed, sending fallback result")
+
+    if use_fallback and visual_unavailable_reason == "image_download_failed":
+        failure_meta = (
+            network.get_last_image_failure()
+            if hasattr(network, "get_last_image_failure")
+            else {"reason": "unknown", "is_transient": True, "is_permanent": False}
+        )
+        visual_unavailable_transient = bool(failure_meta.get("is_transient", True))
+        visual_unavailable_permanent = bool(failure_meta.get("is_permanent", False))
+        if visual_unavailable_transient:
+            kpi_counters["visual_unavailable_transient"] += 1
+        if visual_unavailable_permanent:
+            kpi_counters["visual_unavailable_permanent"] += 1
 
     if use_fallback:
         gps_health = int(float(frame_data.get("gps_health", 0)))
@@ -1240,10 +1283,26 @@ def _fetch_competition_step(
                 "reason_code": "frame_download_failed",
             }
         )
+        carried_objects: List[Dict[str, Any]] = []
+        if visual_unavailable_transient:
+            cached_objects = carry_forward_cache.get("objects") or []
+            cached_ttl = int(carry_forward_cache.get("ttl", 0))
+            if cached_objects and cached_ttl > 0:
+                carried_objects = _build_low_confidence_carry_forward(cached_objects)
+                kpi_counters["carry_forward_used"] += 1
+                carry_forward_cache["ttl"] = cached_ttl - 1
+                if carry_forward_cache["ttl"] <= 0:
+                    carry_forward_cache["objects"] = []
+                    carry_forward_cache["source_frame_id"] = None
+            else:
+                kpi_counters["carry_forward_missed"] += 1
+
+        degrade_flag = bool(degrade_mode or visual_unavailable_transient or visual_unavailable_permanent)
+
         pending_result = {
-            "frame_id": frame_id, "frame_data": frame_data, "detected_objects": [],
+            "frame_id": frame_id, "frame_data": frame_data, "detected_objects": carried_objects,
             "frame": None, "position": last_position,
-            "degraded": degrade_mode, "pending_ttl": 1 if degrade_mode else None,
+            "degraded": degrade_flag, "pending_ttl": 1 if degrade_flag else None,
             "detected_translation": {
                 "translation_x": last_position["x"],
                 "translation_y": last_position["y"],
@@ -1254,6 +1313,9 @@ def _fetch_competition_step(
             "frame_fetch_monotonic": frame_fetch_monotonic,
             "frame_shape": None, "detected_undefined_objects": [],
             "is_duplicate": fetch_result.is_duplicate,
+            "fallback_reason": visual_unavailable_reason or "degrade_fetch_only",
+            "visual_unavailable_transient": visual_unavailable_transient,
+            "visual_unavailable_permanent": visual_unavailable_permanent,
         }
     else:
         frame_ctx = FrameContext(frame)
@@ -1288,6 +1350,9 @@ def _fetch_competition_step(
             "frame_shape": frame.shape, "detected_undefined_objects": undefined_objects,
             "is_duplicate": fetch_result.is_duplicate,
         }
+        carry_forward_cache["objects"] = [dict(obj) for obj in detected_objects if isinstance(obj, dict)]
+        carry_forward_cache["ttl"] = 1
+        carry_forward_cache["source_frame_id"] = frame_id
 
     return pending_result, transient_failures, "process", fetch_result.is_duplicate
 
@@ -1336,6 +1401,12 @@ def _submit_competition_step(
     guard_snapshot = network.consume_payload_guard_counters()
     kpi_counters["payload_preflight_reject_count"] += guard_snapshot.get("preflight_reject", 0)
     kpi_counters["payload_clipped_count"] += guard_snapshot.get("payload_clipped", 0)
+    if hasattr(network, "consume_fallback_counters"):
+        fallback_snapshot = network.consume_fallback_counters()
+        aggregate = kpi_counters.get("network_fallback_counters", {})
+        for reason, count in fallback_snapshot.items():
+            aggregate[reason] = int(aggregate.get(reason, 0)) + int(count)
+        kpi_counters["network_fallback_counters"] = aggregate
 
     pending_result_snapshot = dict(pending_result)
 
