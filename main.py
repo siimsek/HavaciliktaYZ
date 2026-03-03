@@ -1053,27 +1053,6 @@ def main() -> None:
     log = Logger("Main")
     args = parse_args()
     apply_runtime_overrides(args, log)
-    mode_policy = resolve_mode_policy(args.mode)
-
-    requested_profile = args.deterministic_profile
-    effective_profile = requested_profile
-    if args.mode == "competition" and requested_profile != "max":
-        log.warn(
-            "Competition mode requires deterministic-profile=max; "
-            f"overriding requested profile '{requested_profile}' -> 'max'"
-        )
-        effective_profile = "max"
-
-    apply_runtime_profile(effective_profile, requested_profile=requested_profile)
-
-    log.info(
-        "Mode policy applied: "
-        f"profile={mode_policy.profile_name} "
-        f"window_output={'ON' if mode_policy.allow_window_output else 'OFF'} "
-        f"debug_save={'ON' if mode_policy.allow_debug_save else 'OFF'}"
-    )
-
-    print(BANNER)
 
     if args.interactive:
         choices = show_interactive_menu()
@@ -1099,6 +1078,33 @@ def main() -> None:
                 "show": args.show,
                 "save": args.save,
             }
+
+    selected_mode = (
+        "competition"
+        if choices["mode"] == "competition"
+        else ("simulate_vid" if choices["prefer_vid"] else "simulate_det")
+    )
+    mode_policy = resolve_mode_policy(selected_mode)
+
+    requested_profile = args.deterministic_profile
+    effective_profile = requested_profile
+    if selected_mode == "competition" and requested_profile != "max":
+        log.warn(
+            "Competition mode requires deterministic-profile=max; "
+            f"overriding requested profile '{requested_profile}' -> 'max'"
+        )
+        effective_profile = "max"
+
+    apply_runtime_profile(effective_profile, requested_profile=requested_profile)
+
+    log.info(
+        "Mode policy applied: "
+        f"profile={mode_policy.profile_name} "
+        f"window_output={'ON' if mode_policy.allow_window_output else 'OFF'} "
+        f"debug_save={'ON' if mode_policy.allow_debug_save else 'OFF'}"
+    )
+
+    print(BANNER)
 
     simulate = choices["mode"] == "simulate"
     if not mode_policy.allow_window_output:
