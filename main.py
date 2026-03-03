@@ -1097,7 +1097,11 @@ def main() -> None:
 
     requested_profile = args.deterministic_profile
     effective_profile = requested_profile
-    if args.mode == Settings.COMPETITION_RUNTIME_MODE and requested_profile != "max":
+    if (
+        not args.interactive
+        and args.mode == Settings.COMPETITION_RUNTIME_MODE
+        and requested_profile != "max"
+    ):
         log.warn(
             "Competition mode requires deterministic-profile=max; "
             f"overriding requested profile '{requested_profile}' -> 'max'"
@@ -1139,6 +1143,14 @@ def main() -> None:
             }
 
     simulate = choices["mode"] == "simulate"
+    if not simulate and effective_profile != "max":
+        log.warn(
+            "Competition mode requires deterministic-profile=max; "
+            f"overriding requested profile '{requested_profile}' -> 'max'"
+        )
+        effective_profile = "max"
+        apply_runtime_profile(effective_profile, requested_profile=requested_profile)
+
     runtime_mode_label = "VISUAL_VALIDATION" if simulate else "COMPETITION"
     print_system_info(log, runtime_mode_label=runtime_mode_label)
 

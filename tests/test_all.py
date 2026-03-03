@@ -112,6 +112,54 @@ class TestRuntimeModeSelection:
         assert run_simulation_mock.called
         assert not run_competition_mock.called
 
+    def test_interactive_competition_enforces_max_profile(self):
+        with patch.object(main_module, "parse_args") as parse_args_mock, patch.object(
+            main_module, "show_interactive_menu"
+        ) as show_interactive_menu_mock, patch.object(
+            main_module, "run_simulation"
+        ) as run_simulation_mock, patch.object(
+            main_module, "run_competition"
+        ) as run_competition_mock, patch.object(
+            main_module, "apply_runtime_profile"
+        ) as apply_runtime_profile_mock, patch.object(
+            main_module, "apply_runtime_overrides"
+        ), patch.object(
+            main_module, "print_system_info"
+        ), patch(
+            "main.print", return_value=None
+        ):
+            parse_args_mock.return_value = type(
+                "Args",
+                (),
+                {
+                    "mode": "visual_validation",
+                    "interactive": True,
+                    "deterministic_profile": "balanced",
+                    "base_url": None,
+                    "team_name": None,
+                    "show": False,
+                    "save": False,
+                    "seed": None,
+                    "sequence": None,
+                },
+            )()
+            show_interactive_menu_mock.return_value = {
+                "mode": "competition",
+                "prefer_vid": True,
+                "show": False,
+                "save": False,
+            }
+
+            main_module.main()
+
+        assert run_competition_mock.called
+        assert not run_simulation_mock.called
+        assert apply_runtime_profile_mock.call_count == 2
+        assert apply_runtime_profile_mock.call_args_list[-1].kwargs == {
+            "requested_profile": "balanced"
+        }
+        assert apply_runtime_profile_mock.call_args_list[-1].args == ("max",)
+
 
 class TestLogger:
     @patch("builtins.print")
