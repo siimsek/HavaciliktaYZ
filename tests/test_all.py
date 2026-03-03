@@ -643,6 +643,39 @@ class _Response:
 
 
 @unittest.skipUnless(NetworkManager is not None, "network deps missing")
+class TestGpsHealthFallbackTTL(unittest.TestCase):
+    def test_corrupt_health_uses_last_valid_with_ttl_then_zero(self):
+        mgr = NetworkManager(base_url="http://test", simulation_mode=False)
+
+        valid = {"frame_id": "f1", "image_url": "/f1.jpg", "gps_health": 1}
+        self.assertTrue(mgr._validate_frame_data(valid))
+        self.assertEqual(valid["gps_health"], 1)
+        self.assertFalse(valid["gps_health_fallback_used"])
+
+        ttl = int(mgr._gps_health_fallback_ttl_frames)
+        for idx in range(ttl):
+            corrupt = {
+                "frame_id": f"c{idx}",
+                "image_url": f"/c{idx}.jpg",
+                "gps_health": "unknown",
+            }
+            self.assertTrue(mgr._validate_frame_data(corrupt))
+            self.assertEqual(corrupt["gps_health"], 1)
+            self.assertTrue(corrupt["gps_health_fallback_used"])
+            self.assertEqual(corrupt["gps_health_source"], "fallback_ttl")
+
+        exhausted = {
+            "frame_id": "f-exhausted",
+            "image_url": "/f-exhausted.jpg",
+            "gps_health": "unknown",
+        }
+        self.assertTrue(mgr._validate_frame_data(exhausted))
+        self.assertEqual(exhausted["gps_health"], 0)
+        self.assertFalse(exhausted["gps_health_fallback_used"])
+        self.assertEqual(exhausted["gps_health_source"], "fallback_exhausted")
+
+
+@unittest.skipUnless(NetworkManager is not None, "network deps missing")
 class TestNetworkPayloadGuard(unittest.TestCase):
     def setUp(self):
         self._orig = {
@@ -977,6 +1010,32 @@ class TestCompetitionLoopHardening(unittest.TestCase):
              patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
             main_module.run_competition(main_module.Logger("Test"))
         self.assertEqual(call_count[0], 2)
+
+    def test_forced_health_fallback_count_is_reported(self):
+        fd = {
+            "frame_id": "f-health-fallback",
+            "frame_url": "/f.jpg",
+            "gps_health": 1,
+            "gps_health_fallback_used": True,
+            "gps_health_source": "fallback_ttl",
+        }
+        _FakeNetwork.frame_results = [
+            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd, is_duplicate=False),
+            FrameFetchResult(status=FrameFetchStatus.END_OF_STREAM),
+        ]
+        _FakeNetwork.timeout_snapshots = [{"fetch": 0, "image": 0, "submit": 0}] * 6
+
+        with patch("src.network.NetworkManager", _FakeNetwork), \
+             patch.object(main_module, "ObjectDetector", _DummyDetector), \
+             patch.object(main_module, "MovementEstimator", _DummyMovement), \
+             patch.object(main_module, "VisualOdometry", _DummyOdometry), \
+             patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+            main_module.run_competition(main_module.Logger("Test"))
+
+        self.assertEqual(
+            self.summary_calls[-1]["kpi_counters"]["forced_health_fallback_count"],
+            1,
+        )
 
     def test_task3_server_duplicates_only_canonical_passes_matcher(self):
         _Task3RefNetwork.reset()

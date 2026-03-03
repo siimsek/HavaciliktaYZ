@@ -286,6 +286,56 @@ def _safe_gps_health(frame_data: Dict[str, Any]) -> int:
         return 0
 
 
+def _mark_runtime_meta_input_quality(
+    runtime_meta: Optional[Dict[str, Any]],
+    frame_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    meta = dict(runtime_meta or {})
+    if frame_data.get("gps_health_fallback_used"):
+        meta["quality_flag"] = "degraded_input"
+        meta["reason_code"] = str(frame_data.get("gps_health_source", "fallback_ttl"))
+        meta["health_source"] = str(frame_data.get("gps_health_source", "unknown"))
+    return meta
+
+
+def _smooth_mode_transition(
+    raw_gps_health: int,
+    mode_state: Dict[str, Any],
+    stability_frames: int = 2,
+) -> int:
+    stable = mode_state.get("stable")
+    candidate = mode_state.get("candidate")
+    candidate_count = int(mode_state.get("candidate_count", 0))
+
+    if stable is None:
+        mode_state["stable"] = int(raw_gps_health)
+        mode_state["candidate"] = None
+        mode_state["candidate_count"] = 0
+        return int(raw_gps_health)
+
+    raw = int(raw_gps_health)
+    if raw == int(stable):
+        mode_state["candidate"] = None
+        mode_state["candidate_count"] = 0
+        return int(stable)
+
+    if candidate == raw:
+        candidate_count += 1
+    else:
+        candidate = raw
+        candidate_count = 1
+
+    mode_state["candidate"] = candidate
+    mode_state["candidate_count"] = candidate_count
+
+    if candidate_count >= max(1, int(stability_frames)):
+        mode_state["stable"] = raw
+        mode_state["candidate"] = None
+        mode_state["candidate_count"] = 0
+
+    return int(mode_state.get("stable", raw))
+
+
 def _normalize_task3_object_id(raw_object_id: Any) -> Optional[int]:
     if isinstance(raw_object_id, bool) or raw_object_id is None:
         return None
@@ -604,6 +654,7 @@ def run_competition(log: Logger) -> None:
         "timeout_fetch": 0,
         "timeout_image": 0,
         "timeout_submit": 0,
+        "forced_health_fallback_count": 0,
         "consecutive_duplicate_abort": 0,
         "compensation_apply_count": 0,
         "compensation_sum_delta_m": 0.0,
@@ -618,6 +669,7 @@ def run_competition(log: Logger) -> None:
         "id_integrity_reason_code": id_integrity_reason_code,
     }
     pending_result: Optional[Dict] = None
+    mode_transition_state: Dict[str, Any] = {}
 
     def signal_handler(sig, frame) -> None:
         nonlocal running
@@ -676,6 +728,11 @@ def run_competition(log: Logger) -> None:
                     _, success_info = action_result
 
                     gps_health = _safe_gps_health(success_info["frame_data"])
+                    gps_health = _smooth_mode_transition(
+                        gps_health,
+                        mode_transition_state,
+                        stability_frames=2,
+                    )
 
                     if gps_health == 1:
                         kpi_counters["mode_gps"] += 1
@@ -879,6 +936,7 @@ def _print_summary(
             f"Permanent Reject={kpi_counters.get('send_permanent_reject', 0)} | "
             f"Preflight Reject={kpi_counters.get('payload_preflight_reject_count', 0)} | "
             f"Payload Clipped={kpi_counters.get('payload_clipped_count', 0)} | "
+            f"Forced Health Fallback={kpi_counters.get('forced_health_fallback_count', 0)} | "
             f"Mode OF={kpi_counters.get('mode_of', 0)} | "
             f"Degrade Frames={kpi_counters.get('degrade_frames', 0)} | "
             f"DupDrop={kpi_counters.get('frame_duplicate_drop', 0)} | "
@@ -1189,6 +1247,7 @@ def _fetch_competition_step(
                 "reason_code": "frame_download_failed",
             }
         )
+        runtime_meta = _mark_runtime_meta_input_quality(runtime_meta, frame_data)
         pending_result = {
             "frame_id": frame_id, "frame_data": frame_data, "detected_objects": [],
             "frame": None, "position": last_position,
@@ -1222,6 +1281,7 @@ def _fetch_competition_step(
                 "reason_code": "legacy_odometry",
             }
         )
+        runtime_meta = _mark_runtime_meta_input_quality(runtime_meta, frame_data)
         pending_result = {
             "frame_id": frame_id, "frame_data": frame_data, "detected_objects": detected_objects,
             "frame": frame, "position": position, "degraded": degrade_mode,
@@ -1237,6 +1297,9 @@ def _fetch_competition_step(
             "frame_shape": frame.shape, "detected_undefined_objects": undefined_objects,
             "is_duplicate": fetch_result.is_duplicate,
         }
+
+    if frame_data.get("gps_health_fallback_used"):
+        kpi_counters["forced_health_fallback_count"] += 1
 
     return pending_result, transient_failures, "process", fetch_result.is_duplicate
 

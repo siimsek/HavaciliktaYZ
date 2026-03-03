@@ -73,6 +73,9 @@ class NetworkManager:
         self._clip_ratio_window: Deque[int] = deque(maxlen=100)
         self._session_id: str = str(int(time.time()))
         self._task3_references: list = []
+        self._last_valid_gps_health: int = 0
+        self._gps_health_fallback_ttl_frames: int = 3
+        self._gps_health_fallback_ttl_remaining: int = 0
 
     def get_task3_references(self) -> list:
         return list(self._task3_references)
@@ -525,6 +528,9 @@ class NetworkManager:
         health_val = data.get("gps_health")
         if health_val is None:
             health_val = data.get("gps_health_status", 0)
+
+        gps_health_valid = True
+        parsed_health: Optional[int] = None
         try:
             if health_val is None or str(health_val).strip().lower() in {
                 "unknown",
@@ -532,12 +538,35 @@ class NetworkManager:
                 "null",
                 "",
             }:
-                data["gps_health"] = 0
+                gps_health_valid = False
             else:
-                data["gps_health"] = int(float(health_val))
+                parsed_health = int(float(health_val))
         except (ValueError, TypeError):
-            self.log.warn(f"Corrupt gps_health value: {health_val!r}, forcing 0")
-            data["gps_health"] = 0
+            gps_health_valid = False
+
+        data["gps_health_fallback_used"] = False
+        data["gps_health_source"] = "direct"
+        if gps_health_valid and parsed_health is not None:
+            data["gps_health"] = parsed_health
+            self._last_valid_gps_health = parsed_health
+            self._gps_health_fallback_ttl_remaining = self._gps_health_fallback_ttl_frames
+        else:
+            if self._gps_health_fallback_ttl_remaining > 0:
+                self._gps_health_fallback_ttl_remaining -= 1
+                data["gps_health"] = int(self._last_valid_gps_health)
+                data["gps_health_fallback_used"] = True
+                data["gps_health_source"] = "fallback_ttl"
+                self.log.warn(
+                    "Corrupt gps_health value: "
+                    f"{health_val!r}, using last valid={self._last_valid_gps_health} "
+                    f"(ttl_remaining={self._gps_health_fallback_ttl_remaining})"
+                )
+            else:
+                self.log.warn(
+                    f"Corrupt gps_health value: {health_val!r}, fallback TTL exhausted, forcing 0"
+                )
+                data["gps_health"] = 0
+                data["gps_health_source"] = "fallback_exhausted"
         data["gps_health_status"] = data["gps_health"]
 
         for key in ["translation_x", "translation_y", "translation_z", "altitude"]:
