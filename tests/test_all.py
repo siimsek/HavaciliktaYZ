@@ -1012,6 +1012,31 @@ class TestCompetitionLoopHardening(unittest.TestCase):
             main_module.run_competition(main_module.Logger("Test"))
         self.assertEqual(call_count[0], 2)
 
+    def test_forced_health_fallback_telemetry_and_smoothed_mode(self):
+        self._orig["GPS_MODE_SWITCH_SMOOTH_FRAMES"] = Settings.GPS_MODE_SWITCH_SMOOTH_FRAMES
+        Settings.GPS_MODE_SWITCH_SMOOTH_FRAMES = 2
+        fd1 = {
+            "frame_id": "f1", "frame_url": "/f1.jpg", "gps_health": 1,
+            "gps_health_source": "direct", "gps_health_fallback_forced": False,
+        }
+        fd2 = {
+            "frame_id": "f2", "frame_url": "/f2.jpg", "gps_health": 0,
+            "gps_health_source": "fallback_last_valid", "gps_health_fallback_forced": True,
+        }
+        _FakeNetwork.frame_results = [
+            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd1, is_duplicate=False),
+            FrameFetchResult(status=FrameFetchStatus.OK, frame_data=fd2, is_duplicate=False),
+            FrameFetchResult(status=FrameFetchStatus.END_OF_STREAM),
+        ]
+        _FakeNetwork.timeout_snapshots = [{"fetch": 0, "image": 0, "submit": 0}] * 10
+
+        with patch("src.network.NetworkManager", _FakeNetwork),              patch.object(main_module, "ObjectDetector", _DummyDetector),              patch.object(main_module, "MovementEstimator", _DummyMovement),              patch.object(main_module, "VisualOdometry", _DummyOdometry),              patch.object(main_module, "_print_summary", side_effect=self._summary_cb):
+            main_module.run_competition(main_module.Logger("Test"))
+
+        kpi = self.summary_calls[-1]["kpi_counters"]
+        self.assertEqual(kpi["forced_health_fallback_count"], 1)
+        self.assertEqual(kpi["mode_of"], 0)
+
     def test_task3_server_duplicates_only_canonical_passes_matcher(self):
         _Task3RefNetwork.reset()
         _Task3RefNetwork.frame_results = [
@@ -1043,6 +1068,62 @@ class TestCompetitionLoopHardening(unittest.TestCase):
         self.assertEqual(kpi["reference_validation_stats"]["duplicate"], 1)
         self.assertEqual(kpi["id_integrity_mode"], "degraded")
         self.assertEqual(kpi["id_integrity_reason_code"], "duplicate_detected_safe_degrade")
+
+
+
+
+@unittest.skipUnless(NetworkManager is not None, "network deps missing")
+class TestNetworkGpsHealthFallback(unittest.TestCase):
+    def setUp(self):
+        self._orig_ttl = Settings.GPS_HEALTH_FALLBACK_TTL_SEC
+        Settings.GPS_HEALTH_FALLBACK_TTL_SEC = 1.0
+        self.net = NetworkManager(base_url="http://localhost", simulation_mode=False)
+
+    def tearDown(self):
+        Settings.GPS_HEALTH_FALLBACK_TTL_SEC = self._orig_ttl
+
+    def test_corrupt_health_uses_last_valid_within_ttl(self):
+        first = {"id": "f-1", "image_url": "/1.jpg", "gps_health": "1"}
+        second = {"id": "f-2", "image_url": "/2.jpg", "gps_health": "NaN"}
+
+        self.assertTrue(self.net._validate_frame_data(first))
+        self.assertEqual(first["gps_health"], 1)
+        self.assertEqual(first["gps_health_source"], "direct")
+
+        self.assertTrue(self.net._validate_frame_data(second))
+        self.assertEqual(second["gps_health"], 1)
+        self.assertEqual(second["gps_health_source"], "fallback_last_valid")
+        self.assertTrue(second["gps_health_fallback_forced"])
+
+    def test_corrupt_health_after_ttl_forces_zero(self):
+        first = {"id": "f-1", "image_url": "/1.jpg", "gps_health": "1"}
+        expired = {"id": "f-3", "image_url": "/3.jpg", "gps_health": "invalid"}
+
+        self.assertTrue(self.net._validate_frame_data(first))
+        self.net._gps_health_fallback_expiry_monotonic = time.monotonic() - 0.01
+
+        self.assertTrue(self.net._validate_frame_data(expired))
+        self.assertEqual(expired["gps_health"], 0)
+        self.assertEqual(expired["gps_health_source"], "fallback_zero_expired")
+        self.assertTrue(expired["gps_health_fallback_forced"])
+
+
+
+
+@unittest.skipUnless(main_module is not None, "main module missing")
+class TestRuntimeMetaInputDegrade(unittest.TestCase):
+    def test_runtime_meta_marked_degraded_for_uncertain_health_source(self):
+        runtime_meta = {
+            "update_mode": "corrected",
+            "state_source": "optical_flow",
+            "quality_flag": "nominal",
+            "reason_code": "gps_unhealthy_optical_flow",
+        }
+        frame_data = {"gps_health_source": "fallback_last_valid"}
+        marked = main_module._mark_runtime_meta_input_degraded(runtime_meta, frame_data)
+        self.assertEqual(marked["quality_flag"], "degraded_input")
+        self.assertIn("fallback_last_valid", marked["reason_code"])
+        self.assertEqual(marked["input_health_source"], "fallback_last_valid")
 
 
 class _LatencyNet:
@@ -1164,8 +1245,9 @@ class TestFetchCarryForward(unittest.TestCase):
                "carry_forward_used": 0, "carry_forward_missed": 0,
                "visual_unavailable_transient": 0, "visual_unavailable_permanent": 0}
         net = self._Net()
+        mode_state = {"effective_gps_health": None, "hold_remaining": 0}
         common = [main_module.Logger("T"), net, self._Detector(), self._Movement(), self._Odometry(), None,
-                  self._Resilience(), kpi, 0, 3, cache]
+                  self._Resilience(), kpi, 0, 3, cache, mode_state]
         first, *_ = main_module._fetch_competition_step(*common)
         second, *_ = main_module._fetch_competition_step(*common)
         self.assertEqual(len(first["detected_objects"]), 1)

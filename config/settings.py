@@ -136,6 +136,8 @@ class Settings:
     CB_SESSION_MAX_TRANSIENT_SEC: float = 120.0
     DEGRADE_FETCH_ONLY_ENABLED: bool = True
     DEGRADE_SEND_INTERVAL_FRAMES: int = 5
+    GPS_HEALTH_FALLBACK_TTL_SEC: float = 1.5
+    GPS_MODE_SWITCH_SMOOTH_FRAMES: int = 2
 
     # Dosya yolları
     LOG_DIR: str = os.path.join(str(PROJECT_ROOT), "logs")

@@ -306,6 +306,47 @@ def _safe_gps_health(frame_data: Dict[str, Any]) -> int:
         return 0
 
 
+def _resolve_effective_gps_health(
+    frame_data: Dict[str, Any],
+    mode_switch_state: Dict[str, Any],
+) -> int:
+    raw_health = _safe_gps_health(frame_data)
+    source = str(frame_data.get("gps_health_source", "direct") or "direct")
+    is_uncertain_source = source != "direct"
+
+    prev_effective = mode_switch_state.get("effective_gps_health")
+    if prev_effective is None:
+        mode_switch_state["effective_gps_health"] = raw_health
+        mode_switch_state["hold_remaining"] = 0
+        return raw_health
+
+    if is_uncertain_source and raw_health != prev_effective:
+        hold_remaining = int(mode_switch_state.get("hold_remaining", 0))
+        if hold_remaining <= 0:
+            hold_remaining = max(0, int(getattr(Settings, "GPS_MODE_SWITCH_SMOOTH_FRAMES", 2)))
+        if hold_remaining > 0:
+            mode_switch_state["hold_remaining"] = hold_remaining - 1
+            mode_switch_state["effective_gps_health"] = int(prev_effective)
+            return int(prev_effective)
+
+    mode_switch_state["effective_gps_health"] = raw_health
+    mode_switch_state["hold_remaining"] = 0
+    return raw_health
+
+
+def _mark_runtime_meta_input_degraded(runtime_meta: Dict[str, Any], frame_data: Dict[str, Any]) -> Dict[str, Any]:
+    source = str(frame_data.get("gps_health_source", "direct") or "direct")
+    if source == "direct":
+        return runtime_meta
+
+    marked_meta = dict(runtime_meta)
+    marked_meta["quality_flag"] = "degraded_input"
+    reason_code = str(marked_meta.get("reason_code", "unknown"))
+    marked_meta["reason_code"] = f"{reason_code}+{source}"
+    marked_meta["input_health_source"] = source
+    return marked_meta
+
+
 def _build_low_confidence_carry_forward(objects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     carry_objects: List[Dict[str, Any]] = []
     for obj in objects:
@@ -659,9 +700,11 @@ def run_competition(log: Logger) -> None:
         "visual_unavailable_transient": 0,
         "visual_unavailable_permanent": 0,
         "network_fallback_counters": {},
+        "forced_health_fallback_count": 0,
     }
     pending_result: Optional[Dict] = None
     carry_forward_cache: Dict[str, Any] = {"objects": [], "ttl": 0, "source_frame_id": None}
+    mode_switch_state: Dict[str, Any] = {"effective_gps_health": None, "hold_remaining": 0}
 
     def signal_handler(sig, frame) -> None:
         nonlocal running
@@ -718,7 +761,7 @@ def run_competition(log: Logger) -> None:
                         continue
                     _, success_info = action_result
 
-                    gps_health = _safe_gps_health(success_info["frame_data"])
+                    gps_health = int(success_info.get("effective_gps_health", _safe_gps_health(success_info["frame_data"])))
 
                     if gps_health == 1:
                         kpi_counters["mode_gps"] += 1
@@ -760,7 +803,7 @@ def run_competition(log: Logger) -> None:
                             _fetch_competition_step,
                             log, network, detector, movement, odometry, image_matcher,
                             resilience, kpi_counters, transient_failures, transient_budget,
-                            carry_forward_cache,
+                            carry_forward_cache, mode_switch_state,
                         )
 
                     if fetch_future.done():
@@ -935,6 +978,7 @@ def _print_summary(
             f"Permanent Reject={kpi_counters.get('send_permanent_reject', 0)} | "
             f"Preflight Reject={kpi_counters.get('payload_preflight_reject_count', 0)} | "
             f"Payload Clipped={kpi_counters.get('payload_clipped_count', 0)} | "
+            f"ForcedHealthFallback={kpi_counters.get('forced_health_fallback_count', 0)} | "
             f"Mode OF={kpi_counters.get('mode_of', 0)} | "
             f"Degrade Frames={kpi_counters.get('degrade_frames', 0)} | "
             f"DupDrop={kpi_counters.get('frame_duplicate_drop', 0)} | "
@@ -1165,7 +1209,7 @@ def main() -> None:
 def _fetch_competition_step(
     log: Logger, network: Any, detector: Any, movement: Any, odometry: Any, image_matcher: Any,
     resilience: Any, kpi_counters: dict, transient_failures: int, transient_budget: int,
-    carry_forward_cache: Dict[str, Any],
+    carry_forward_cache: Dict[str, Any], mode_switch_state: Dict[str, Any],
 ):
     from src.network import FrameFetchStatus
     import time
@@ -1202,6 +1246,11 @@ def _fetch_competition_step(
         return None, transient_failures, "break", False
 
     frame_data = fetch_result.frame_data or {}
+    effective_gps_health = _resolve_effective_gps_health(frame_data, mode_switch_state)
+    frame_data["gps_health_effective"] = effective_gps_health
+    frame_data["gps_health"] = effective_gps_health
+    if bool(frame_data.get("gps_health_fallback_forced", False)):
+        kpi_counters["forced_health_fallback_count"] += 1
     transient_failures = 0
     degrade_mode = Settings.DEGRADE_FETCH_ONLY_ENABLED and resilience.is_degraded()
     frame_id = frame_data.get("frame_id", "unknown")
@@ -1283,6 +1332,7 @@ def _fetch_competition_step(
                 "reason_code": "frame_download_failed",
             }
         )
+        runtime_meta = _mark_runtime_meta_input_degraded(runtime_meta, frame_data)
         carried_objects: List[Dict[str, Any]] = []
         if visual_unavailable_transient:
             cached_objects = carry_forward_cache.get("objects") or []
@@ -1316,6 +1366,7 @@ def _fetch_competition_step(
             "fallback_reason": visual_unavailable_reason or "degrade_fetch_only",
             "visual_unavailable_transient": visual_unavailable_transient,
             "visual_unavailable_permanent": visual_unavailable_permanent,
+            "effective_gps_health": effective_gps_health,
         }
     else:
         frame_ctx = FrameContext(frame)
@@ -1335,6 +1386,7 @@ def _fetch_competition_step(
                 "reason_code": "legacy_odometry",
             }
         )
+        runtime_meta = _mark_runtime_meta_input_degraded(runtime_meta, frame_data)
         pending_result = {
             "frame_id": frame_id, "frame_data": frame_data, "detected_objects": detected_objects,
             "frame": frame, "position": position, "degraded": degrade_mode,
@@ -1349,6 +1401,7 @@ def _fetch_competition_step(
             "frame_fetch_monotonic": frame_fetch_monotonic,
             "frame_shape": frame.shape, "detected_undefined_objects": undefined_objects,
             "is_duplicate": fetch_result.is_duplicate,
+            "effective_gps_health": effective_gps_health,
         }
         carry_forward_cache["objects"] = [dict(obj) for obj in detected_objects if isinstance(obj, dict)]
         carry_forward_cache["ttl"] = 1
@@ -1445,7 +1498,8 @@ def _submit_competition_step(
             "detected_objects": detected_objects,
             "position": pending_result_snapshot.get("position"),
             "frame_id": frame_id,
-            "frame_data": frame_data
+            "frame_data": frame_data,
+            "effective_gps_health": int(pending_result_snapshot.get("effective_gps_health", _safe_gps_health(frame_data))),
         }
         return pending_result, ack_failures, ("process", success_info), consecutive_permanent_rejects
     else:

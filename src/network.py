@@ -95,6 +95,8 @@ class NetworkManager:
         self._session_id: str = str(int(time.time()))
         self._task3_references: list = []
         self._allowed_netlocs = self._build_allowed_netlocs()
+        self._last_valid_gps_health: Optional[int] = None
+        self._gps_health_fallback_expiry_monotonic: float = 0.0
 
     def _build_allowed_netlocs(self) -> set:
         base_netloc = urlparse(self.base_url).netloc.lower()
@@ -626,19 +628,35 @@ class NetworkManager:
         health_val = data.get("gps_health")
         if health_val is None:
             health_val = data.get("gps_health_status", 0)
-        try:
-            if health_val is None or str(health_val).strip().lower() in {
-                "unknown",
-                "none",
-                "null",
-                "",
-            }:
-                data["gps_health"] = 0
+
+        data["gps_health_fallback_forced"] = False
+        parsed_health = self._parse_gps_health_value(health_val)
+        if parsed_health is not None:
+            data["gps_health"] = parsed_health
+            data["gps_health_source"] = "direct"
+            self._last_valid_gps_health = parsed_health
+            ttl_sec = max(0.0, float(getattr(Settings, "GPS_HEALTH_FALLBACK_TTL_SEC", 1.5)))
+            self._gps_health_fallback_expiry_monotonic = time.monotonic() + ttl_sec
+        else:
+            now_mono = time.monotonic()
+            if (
+                self._last_valid_gps_health is not None
+                and now_mono <= self._gps_health_fallback_expiry_monotonic
+            ):
+                data["gps_health"] = int(self._last_valid_gps_health)
+                data["gps_health_source"] = "fallback_last_valid"
+                data["gps_health_fallback_forced"] = True
+                self.log.warn(
+                    f"Corrupt gps_health value: {health_val!r}, using last valid value "
+                    f"{self._last_valid_gps_health} (ttl_active)"
+                )
             else:
-                data["gps_health"] = int(float(health_val))
-        except (ValueError, TypeError):
-            self.log.warn(f"Corrupt gps_health value: {health_val!r}, forcing 0")
-            data["gps_health"] = 0
+                data["gps_health"] = 0
+                data["gps_health_source"] = "fallback_zero_expired"
+                data["gps_health_fallback_forced"] = True
+                self.log.warn(
+                    f"Corrupt gps_health value: {health_val!r}, fallback TTL expired -> forcing 0"
+                )
         data["gps_health_status"] = data["gps_health"]
 
         for key in ["translation_x", "translation_y", "translation_z", "altitude"]:
@@ -662,6 +680,23 @@ class NetworkManager:
                     data[key] = 0.0
 
         return True
+
+    @staticmethod
+    def _parse_gps_health_value(health_val: Any) -> Optional[int]:
+        if health_val is None:
+            return None
+
+        normalized = str(health_val).strip().lower()
+        if normalized in {"unknown", "none", "null", "", "nan", "inf", "-inf"}:
+            return None
+
+        try:
+            parsed = float(health_val)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(parsed) or math.isinf(parsed):
+            return None
+        return int(parsed)
 
     def _preflight_validate_and_normalize_payload(
         self,
