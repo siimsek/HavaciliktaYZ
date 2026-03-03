@@ -1,13 +1,13 @@
 # CHANGELOGS
 
 ## 0.0.36 - 2026-03-03
-- **feat(runtime)**: Çalışma modu sözleşmesi iki ana moda netleştirildi: `competition` ve `visual_validation`.
-- **feat(cli)**: Varsayılan başlatma modu `visual_validation` olarak ayarlandı; `competition` açıkça seçilebilir bırakıldı.
-- **chore(compat)**: Geriye dönük uyumluluk için `simulate_vid` ve `simulate_det` CLI aliasları korundu.
-- **chore(config)**: `config/settings.py` içine merkezi mod sabitleri eklendi (`DEFAULT_RUNTIME_MODE`, `COMPETITION_RUNTIME_MODE`, `VISUAL_VALIDATION_RUNTIME_MODE`).
-- **docs(readme)**: Kullanım ve yapılandırma bölümleri, varsayılanın görsel doğrulama/test modu olduğunu açıkça gösterecek şekilde güncellendi.
-- **test(runtime)**: Varsayılan modun `visual_validation` olduğunu ve bu modun simülasyon yoluna yönlendiğini doğrulayan testler eklendi/güncellendi.
-- **chore(validation)**: Ubuntu 22.04 uyumlu mevcut bağımlılık/çalıştırma varsayımları korunarak formatter/linter/test doğrulamaları tekrarlandı.
+- **feat(runtime)**: Simplified runtime contract to two clear modes: `competition` and `visual_validation`.
+- **feat(cli)**: Set `visual_validation` as the default startup mode while keeping `competition` explicitly selectable.
+- **chore(compat)**: Preserved backward-compatible CLI aliases `simulate_vid` and `simulate_det`.
+- **chore(config)**: Added centralized mode constants in `config/settings.py` (`DEFAULT_RUNTIME_MODE`, `COMPETITION_RUNTIME_MODE`, `VISUAL_VALIDATION_RUNTIME_MODE`).
+- **docs(readme)**: Updated usage/configuration docs to clearly state visual validation/test as the default mode.
+- **test(runtime)**: Added/updated tests to verify default mode is `visual_validation` and dispatch goes through the simulation path.
+- **chore(validation)**: Re-ran formatter/linter/test validation under existing Ubuntu 22.04-compatible runtime assumptions.
 
 ## 0.0.34 - 2026-03-01
 - **fix(network)**: Fixed E999 SyntaxError — `if response.status_code == 204` and 5xx branches moved inside `try` block with correct indentation.
