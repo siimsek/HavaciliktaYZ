@@ -443,6 +443,14 @@ python -m pytest tests/test_all.py -v
 
 Gereksinimler: `pytest`, `pytest-timeout`, `PyYAML` (`requirements.txt` içinde)
 
+### Teknik Borç Listesi
+
+- **TD-001 — Ağ katmanını yeni istemciye taşıma önerisi**
+  - Durum: **Ertelendi**
+  - Etiket: `post-competition değerlendirme`
+  - Karar: Yarışma öncesi mevcut `requests + retry + resilience` hattı korunacaktır.
+  - Kapsam: Bu fazda yalnızca kritik bug düzeltmeleri uygulanır.
+
 ---
 
 ## 📏 Yarışma Kuralları (Şartname Özeti)
