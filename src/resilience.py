@@ -22,6 +22,14 @@ class ResilienceStats:
     degrade_frames: int = 0
     recovered_count: int = 0
     transient_wall_time_sec: float = 0.0
+    telemetry_alarm_count: int = 0
+    duplicate_streak_alarm_count: int = 0
+    permanent_reject_alarm_count: int = 0
+    fetch_attempt_count: int = 0
+    success_cycle_count: int = 0
+    ack_failure_count: int = 0
+    throughput_fps: float = 0.0
+    success_rate: float = 0.0
 
 
 class SessionResilienceController:
@@ -34,6 +42,7 @@ class SessionResilienceController:
 
         self._fetch_events: Deque[float] = deque()
         self._ack_events: Deque[float] = deque()
+        self._started_at_monotonic: float = time.monotonic()
 
         self._non_normal_since: Optional[float] = None
         self._open_until_monotonic: float = 0.0
@@ -102,7 +111,11 @@ class SessionResilienceController:
         elif self.state == ResilienceState.NORMAL:
             self._transition(ResilienceState.DEGRADED, reason="fetch_transient_detected", now=now)
 
+    def on_fetch_attempt(self) -> None:
+        self.stats.fetch_attempt_count += 1
+
     def on_ack_failure(self) -> None:
+        self.stats.ack_failure_count += 1
         now = self._now()
         self._ack_events.append(now)
         self._prune_window(self._ack_events, now)
@@ -112,6 +125,7 @@ class SessionResilienceController:
             self._transition(ResilienceState.DEGRADED, reason="ack_transient_detected", now=now)
 
     def on_success_cycle(self) -> None:
+        self.stats.success_cycle_count += 1
         now = self._now()
         self._prune_window(self._fetch_events, now)
         self._prune_window(self._ack_events, now)
@@ -138,15 +152,38 @@ class SessionResilienceController:
         self.stats.degrade_frames += 1
         return self._degrade_frame_counter
 
+    def on_duplicate_streak_alarm(self, streak: int, threshold: int) -> None:
+        self.stats.telemetry_alarm_count += 1
+        self.stats.duplicate_streak_alarm_count += 1
+        now = self._now()
+        if self.state == ResilienceState.NORMAL:
+            self._transition(
+                ResilienceState.DEGRADED,
+                reason=f"duplicate_streak_alarm_{streak}_over_{threshold}",
+                now=now,
+            )
+
+    def on_permanent_reject_alarm(self, streak: int, threshold: int) -> None:
+        self.stats.telemetry_alarm_count += 1
+        self.stats.permanent_reject_alarm_count += 1
+        now = self._now()
+        if self.state == ResilienceState.NORMAL:
+            self._transition(
+                ResilienceState.DEGRADED,
+                reason=f"permanent_reject_streak_alarm_{streak}_over_{threshold}",
+                now=now,
+            )
+
     def should_abort(self) -> Optional[str]:
         if self.state == ResilienceState.NORMAL:
             return None
         wall_time = self._current_transient_wall_time()
         limit = float(Settings.CB_SESSION_MAX_TRANSIENT_SEC)
         if wall_time >= limit:
+            self.stats.telemetry_alarm_count += 1
             return (
                 f"Transient wall time {wall_time:.0f}s >= limit {limit:.0f}s; "
-                "aborting session to avoid indefinite wait"
+                "telemetry alarm only, continuing degraded session"
             )
         return None
 
@@ -158,4 +195,8 @@ class SessionResilienceController:
             now = self._now()
             self.stats.transient_wall_time_sec += max(0.0, now - self._non_normal_since)
             self._non_normal_since = None
+        elapsed = max(1e-6, self._now() - self._started_at_monotonic)
+        self.stats.throughput_fps = float(self.stats.fetch_attempt_count) / elapsed
+        attempts = max(1, int(self.stats.success_cycle_count + self.stats.ack_failure_count))
+        self.stats.success_rate = float(self.stats.success_cycle_count) / float(attempts)
         return self.stats
