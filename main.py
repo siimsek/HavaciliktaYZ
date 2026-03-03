@@ -581,9 +581,9 @@ def run_competition(log: Logger) -> None:
     ack_failures = 0
     ack_failure_budget = max(20, Settings.MAX_RETRIES * 10)
     consecutive_permanent_rejects = 0
-    PERMANENT_REJECT_ABORT_THRESHOLD = 5
+    PERMANENT_REJECT_ALARM_THRESHOLD = 5
     consecutive_duplicate_frames = 0
-    CONSECUTIVE_DUPLICATE_ABORT_THRESHOLD = 5
+    CONSECUTIVE_DUPLICATE_ALARM_THRESHOLD = 5
     resilience = SessionResilienceController(log=log)
     error_policy = ErrorPolicy(
         retry_budget=max(5, Settings.MAX_RETRIES * 2),
@@ -604,7 +604,8 @@ def run_competition(log: Logger) -> None:
         "timeout_fetch": 0,
         "timeout_image": 0,
         "timeout_submit": 0,
-        "consecutive_duplicate_abort": 0,
+        "consecutive_duplicate_alarm": 0,
+        "permanent_reject_alarm": 0,
         "compensation_apply_count": 0,
         "compensation_sum_delta_m": 0.0,
         "compensation_avg_delta_m": 0.0,
@@ -638,8 +639,7 @@ def run_competition(log: Logger) -> None:
             try:
                 abort_reason = resilience.should_abort()
                 if abort_reason:
-                    log.error(f"Resilience abort: {abort_reason}")
-                    break
+                    log.warn(f"Resilience telemetry alarm: {abort_reason}")
 
                 if fps_counter.frame_count >= Settings.MAX_FRAMES:
                     log.success(
@@ -653,7 +653,7 @@ def run_competition(log: Logger) -> None:
                         _submit_competition_step,
                         log, network, resilience, odometry, kpi_counters, pending_result,
                         ack_failures, ack_failure_budget,
-                        consecutive_permanent_rejects, PERMANENT_REJECT_ABORT_THRESHOLD,
+                        consecutive_permanent_rejects, PERMANENT_REJECT_ALARM_THRESHOLD,
                     )
 
                 if submit_future is not None and submit_future.done():
@@ -735,13 +735,19 @@ def run_competition(log: Logger) -> None:
                             break
                         if is_dup:
                             consecutive_duplicate_frames += 1
-                            if consecutive_duplicate_frames >= CONSECUTIVE_DUPLICATE_ABORT_THRESHOLD:
-                                kpi_counters["consecutive_duplicate_abort"] = consecutive_duplicate_frames
-                                log.error(
-                                    f"Ardışık {consecutive_duplicate_frames} duplicate frame, "
-                                    "oturum sonlandırılıyor"
+                            if consecutive_duplicate_frames >= CONSECUTIVE_DUPLICATE_ALARM_THRESHOLD:
+                                kpi_counters["consecutive_duplicate_alarm"] = max(
+                                    int(kpi_counters.get("consecutive_duplicate_alarm", 0)),
+                                    consecutive_duplicate_frames,
                                 )
-                                break
+                                resilience.on_duplicate_streak_alarm(
+                                    streak=consecutive_duplicate_frames,
+                                    threshold=CONSECUTIVE_DUPLICATE_ALARM_THRESHOLD,
+                                )
+                                log.warn(
+                                    f"Ardışık duplicate frame alarmı: streak={consecutive_duplicate_frames} "
+                                    f"threshold={CONSECUTIVE_DUPLICATE_ALARM_THRESHOLD}; oturum degrade modda devam ediyor"
+                                )
                         else:
                             consecutive_duplicate_frames = 0
                         pending_result = fetch_res
@@ -817,6 +823,11 @@ def run_competition(log: Logger) -> None:
                 "degrade_frames": resilience_stats.degrade_frames,
                 "recovered_count": resilience_stats.recovered_count,
                 "transient_wall_time_sec": resilience_stats.transient_wall_time_sec,
+                "telemetry_alarm_count": resilience_stats.telemetry_alarm_count,
+                "duplicate_streak_alarm_count": resilience_stats.duplicate_streak_alarm_count,
+                "permanent_reject_alarm_count": resilience_stats.permanent_reject_alarm_count,
+                "throughput_fps": resilience_stats.throughput_fps,
+                "success_rate": resilience_stats.success_rate,
             },
         )
 
@@ -916,7 +927,12 @@ def _print_summary(
             f"Breaker Open Count={int(resilience_stats.get('breaker_open_count', 0))} | "
             f"Degrade Entries={int(resilience_stats.get('degrade_entries', 0))} | "
             f"Recovery Count={int(resilience_stats.get('recovered_count', 0))} | "
-            f"Transient Wall Time={float(resilience_stats.get('transient_wall_time_sec', 0.0)):.1f}s"
+            f"Transient Wall Time={float(resilience_stats.get('transient_wall_time_sec', 0.0)):.1f}s | "
+            f"Telemetry Alarms={int(resilience_stats.get('telemetry_alarm_count', 0))} | "
+            f"Dup Alarm={int(resilience_stats.get('duplicate_streak_alarm_count', 0))} | "
+            f"PermReject Alarm={int(resilience_stats.get('permanent_reject_alarm_count', 0))} | "
+            f"Fetch Throughput={float(resilience_stats.get('throughput_fps', 0.0)):.2f}fps | "
+            f"Success Rate={float(resilience_stats.get('success_rate', 0.0)):.3f}"
         )
 
     log.success("System shutdown complete")
@@ -1102,6 +1118,7 @@ def _fetch_competition_step(
         return None, transient_failures, "continue", False
 
     fetch_result = network.get_frame()
+    resilience.on_fetch_attempt()
     timeout_snapshot = network.consume_timeout_counters()
     kpi_counters["timeout_fetch"] += timeout_snapshot.get("fetch", 0)
     kpi_counters["timeout_image"] += timeout_snapshot.get("image", 0)
@@ -1244,7 +1261,7 @@ def _fetch_competition_step(
 def _submit_competition_step(
     log: Logger, network: Any, resilience: Any, odometry: VisualOdometry, kpi_counters: dict, pending_result: dict,
     ack_failures: int, ack_failure_budget: int,
-    consecutive_permanent_rejects: int, permanent_reject_abort_threshold: int,
+    consecutive_permanent_rejects: int, permanent_reject_alarm_threshold: int,
 ):
     import time
     required_keys = {
@@ -1296,11 +1313,21 @@ def _submit_competition_step(
         consecutive_permanent_rejects += 1
         log.warn(
             f"Frame {frame_id}: permanent rejected, frame dropped "
-            f"({consecutive_permanent_rejects}/{permanent_reject_abort_threshold})"
+            f"({consecutive_permanent_rejects}/{permanent_reject_alarm_threshold})"
         )
-        if consecutive_permanent_rejects >= permanent_reject_abort_threshold:
-            log.error("Consecutive permanent reject threshold reached, aborting session")
-            return None, ack_failures, "break", consecutive_permanent_rejects
+        if consecutive_permanent_rejects >= permanent_reject_alarm_threshold:
+            kpi_counters["permanent_reject_alarm"] = max(
+                int(kpi_counters.get("permanent_reject_alarm", 0)),
+                consecutive_permanent_rejects,
+            )
+            resilience.on_permanent_reject_alarm(
+                streak=consecutive_permanent_rejects,
+                threshold=permanent_reject_alarm_threshold,
+            )
+            log.warn(
+                "Consecutive permanent reject threshold reached; "
+                "session kept alive in degraded mode with telemetry alarm"
+            )
         return None, ack_failures, "continue", consecutive_permanent_rejects
 
     if success_cycle:
