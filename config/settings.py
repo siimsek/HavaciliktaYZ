@@ -187,6 +187,51 @@ class Settings:
         "3": 10,
     }
 
+    # Mode policy katmanı (competition / visual validation)
+    MODE_PROFILE: str = "visual_validation"
+    VISUAL_DEBUG_WINDOW_ALLOWED: bool = True
+    VISUAL_DEBUG_SAVE_ALLOWED: bool = True
+
+
+class CompetitionProfile:
+    """Yarışma güvenlik profili: debug görselleştirme kapalı."""
+
+    OVERRIDES: dict = {
+        "MODE_PROFILE": "competition",
+        "DEBUG": False,
+        "VISUAL_DEBUG_WINDOW_ALLOWED": False,
+        "VISUAL_DEBUG_SAVE_ALLOWED": False,
+    }
+
+
+class VisualValidationProfile:
+    """Doğrulama profili: debug görselleştirme açık."""
+
+    OVERRIDES: dict = {
+        "MODE_PROFILE": "visual_validation",
+        "DEBUG": True,
+        "VISUAL_DEBUG_WINDOW_ALLOWED": True,
+        "VISUAL_DEBUG_SAVE_ALLOWED": True,
+    }
+
+
+MODE_OVERRIDE_MATRIX: dict = {
+    "competition": CompetitionProfile.OVERRIDES,
+    "visual_validation": VisualValidationProfile.OVERRIDES,
+}
+
+
+def apply_mode_profile(profile_name: str) -> str:
+    """Profil adına göre Settings üstüne mod-bazlı override uygular."""
+    normalized = (profile_name or "").strip().lower()
+    if normalized not in MODE_OVERRIDE_MATRIX:
+        raise ValueError(f"Unsupported mode profile: {profile_name}")
+
+    for key, value in MODE_OVERRIDE_MATRIX[normalized].items():
+        setattr(Settings, key, value)
+
+    return normalized
+
 
 # task3_params.yaml → Görev 3 parametre override
 _TASK3_YAML_PATH: Path = Path(__file__).resolve().parent / "task3_params.yaml"

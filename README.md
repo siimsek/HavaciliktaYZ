@@ -153,6 +153,18 @@ python main.py --mode simulate_det --save
 python main.py --interactive
 ```
 
+### Mode Policy (Competition vs Visual Validation)
+
+#### Competition Modu
+- **Amaç:** Yarışma sunucusuna deterministik ve sade sonuç iletmek.
+- **İzinli Özellikler:** HTTP frame alma/gönderme, model inference, JSON/KPI logları.
+- **Çıktılar:** Terminal log + sunucuya gönderilen JSON; görsel pencere/kare kaydı kapalıdır.
+
+#### Visual Validation Modu
+- **Amaç:** Simülasyon sırasında operatör doğrulaması ve görsel hata ayıklama.
+- **İzinli Özellikler:** Pencere gösterimi (`--show`), görsel kayıt (`--save`), detaylı debug log.
+- **Çıktılar:** Terminal log + (seçilirse) canlı pencere ve `debug_output/` altına kare çıktıları.
+
 ### Mock Server ile Yerel Test
 
 ```bash
@@ -222,6 +234,15 @@ Tüm ayarlar [`config/settings.py`](config/settings.py) içinde merkezi olarak y
 | `SIMULATION_MODE` | `True` | Legacy simülasyon bayrağı (runtime CLI-first çalışır) |
 | `DEBUG` | `True` | Detaylı log + görsel çıktı |
 | `MAX_FRAMES` | `2250` | Yarışma karesi limiti (sunucudan dinamik alınabilir) |
+
+### Mod Bazlı Override Matrisi
+
+| Profil | `DEBUG` | `VISUAL_DEBUG_WINDOW_ALLOWED` | `VISUAL_DEBUG_SAVE_ALLOWED` | Kullanım |
+|--------|---------|-------------------------------|------------------------------|----------|
+| `CompetitionProfile` | `False` | `False` | `False` | Yarışma akışı (`--mode competition`) |
+| `VisualValidationProfile` | `True` | `True` | `True` | Simülasyon/doğrulama (`--mode simulate_vid` / `simulate_det`) |
+
+> `main.py`, çalışma moduna göre `apply_mode_profile(...)` çağırır ve bu matris ile runtime policy uygular.
 
 ### Model Ayarları
 
