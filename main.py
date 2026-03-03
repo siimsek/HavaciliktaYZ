@@ -802,6 +802,7 @@ def run_competition(log: Logger) -> None:
 
     finally:
         resilience_stats = resilience.finalize()
+        network.export_clip_tuning_report()
         log.info("Cleaning resources...")
         if Settings.DEBUG and visualizer is not None:
             cv2.destroyAllWindows()

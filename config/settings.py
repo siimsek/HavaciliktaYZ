@@ -179,12 +179,12 @@ class Settings:
 
     # Yarışma limitleri
     MAX_FRAMES: int = 2250
-    RESULT_MAX_OBJECTS: int = 100
+    RESULT_MAX_OBJECTS: int = 90
     RESULT_CLASS_QUOTA: dict = {
-        "0": 40,
-        "1": 40,
-        "2": 10,
-        "3": 10,
+        "0": 28,
+        "1": 28,
+        "2": 17,
+        "3": 17,
     }
 
 

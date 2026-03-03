@@ -71,6 +71,14 @@ class NetworkManager:
             "payload_clipped": 0,
         }
         self._clip_ratio_window: Deque[int] = deque(maxlen=100)
+        self._clip_frame_events: List[Dict[str, Any]] = []
+        self._clip_aggregate_stats: Dict[str, Any] = {
+            "frames_with_clip": 0,
+            "total_dropped": 0,
+            "total_raw_objects": 0,
+            "total_post_cap_objects": 0,
+            "dropped_by_class": {"0": 0, "1": 0, "2": 0, "3": 0},
+        }
         self._session_id: str = str(int(time.time()))
         self._task3_references: list = []
 
@@ -670,11 +678,51 @@ class NetworkManager:
         }
         global_cap = max(0, self._safe_int(getattr(Settings, "RESULT_MAX_OBJECTS", 100)))
 
+        base_quota_total = sum(class_quota.values())
+        if base_quota_total > 0 and base_quota_total != global_cap:
+            ratio = global_cap / float(base_quota_total)
+            scaled_floor = {
+                cls: int(math.floor(class_quota[cls] * ratio))
+                for cls in class_order
+            }
+            remaining = max(0, global_cap - sum(scaled_floor.values()))
+            fractions = sorted(
+                class_order,
+                key=lambda cls: (class_quota[cls] * ratio - scaled_floor[cls], class_quota[cls]),
+                reverse=True,
+            )
+            for cls in fractions:
+                if remaining <= 0:
+                    break
+                scaled_floor[cls] += 1
+                remaining -= 1
+            class_quota = scaled_floor
+
         grouped: Dict[str, List[Dict[str, Any]]] = {cls: [] for cls in class_order}
         for obj in normalized_objects:
             cls = str(obj.get("cls", ""))
             if cls in grouped:
                 grouped[cls].append(obj)
+
+        class_counts = {cls: len(grouped[cls]) for cls in class_order}
+
+        dynamic_quota = {
+            cls: min(class_counts[cls], class_quota[cls])
+            for cls in class_order
+        }
+        remaining_capacity = max(0, global_cap - sum(dynamic_quota.values()))
+        overflow = {
+            cls: max(0, class_counts[cls] - dynamic_quota[cls])
+            for cls in class_order
+        }
+
+        while remaining_capacity > 0:
+            candidate = max(class_order, key=lambda cls: (overflow[cls], class_counts[cls]))
+            if overflow[candidate] <= 0:
+                break
+            dynamic_quota[candidate] += 1
+            overflow[candidate] -= 1
+            remaining_capacity -= 1
 
         def _rank_key(det: Dict[str, Any]) -> Tuple[float, float, int, int]:
             x1 = self._safe_int(det.get("top_left_x", 0))
@@ -689,7 +737,7 @@ class NetworkManager:
         dropped_by_class: Dict[str, int] = {cls: 0 for cls in class_order}
         for cls in class_order:
             ranked = sorted(grouped[cls], key=_rank_key)
-            keep = ranked[: class_quota[cls]]
+            keep = ranked[: dynamic_quota[cls]]
             dropped_by_class[cls] = max(0, len(ranked) - len(keep))
             post_quota.extend(keep)
 
@@ -709,19 +757,28 @@ class NetworkManager:
         post_global_cap_count = len(capped)
         dropped_total = max(0, raw_count - post_global_cap_count)
         stats = {
+            "frame_id": self._normalize_frame_key(frame_id),
             "raw_count": raw_count,
             "post_quota_count": post_quota_count,
             "post_global_cap_count": post_global_cap_count,
             "dropped_total": dropped_total,
             "dropped_count_by_class": dropped_by_class,
+            "base_class_quota": class_quota,
+            "dynamic_class_quota": dynamic_quota,
+            "class_counts": class_counts,
+            "dropped_after_quota": {
+                cls: max(0, class_counts[cls] - dynamic_quota[cls])
+                for cls in class_order
+            },
         }
 
         if dropped_total > 0:
+            self._record_clip_stats(stats)
             self.log.warn(
                 "Payload clip applied: "
                 f"frame_id={frame_id} raw_count={raw_count} "
                 f"post_quota_count={post_quota_count} post_global_cap_count={post_global_cap_count} "
-                f"dropped_count_by_class={dropped_by_class}"
+                f"dynamic_class_quota={dynamic_quota} dropped_count_by_class={dropped_by_class}"
             )
 
         return capped, stats
@@ -819,6 +876,62 @@ class NetworkManager:
             self.log.error(
                 f"CRITICAL payload clip ratio high in last 100 frames: ratio={ratio:.2f}"
             )
+
+    def _record_clip_stats(self, stats: Dict[str, Any]) -> None:
+        frame_stats = {
+            "frame_id": stats.get("frame_id"),
+            "raw_count": int(stats.get("raw_count", 0)),
+            "post_global_cap_count": int(stats.get("post_global_cap_count", 0)),
+            "dropped_total": int(stats.get("dropped_total", 0)),
+            "class_counts": dict(stats.get("class_counts", {})),
+            "base_class_quota": dict(stats.get("base_class_quota", {})),
+            "dynamic_class_quota": dict(stats.get("dynamic_class_quota", {})),
+            "dropped_count_by_class": dict(stats.get("dropped_count_by_class", {})),
+            "dropped_after_quota": dict(stats.get("dropped_after_quota", {})),
+        }
+        self._clip_frame_events.append(frame_stats)
+
+        self._clip_aggregate_stats["frames_with_clip"] += 1
+        self._clip_aggregate_stats["total_dropped"] += frame_stats["dropped_total"]
+        self._clip_aggregate_stats["total_raw_objects"] += frame_stats["raw_count"]
+        self._clip_aggregate_stats["total_post_cap_objects"] += frame_stats["post_global_cap_count"]
+        for cls, count in frame_stats["dropped_count_by_class"].items():
+            if cls in self._clip_aggregate_stats["dropped_by_class"]:
+                self._clip_aggregate_stats["dropped_by_class"][cls] += int(count)
+
+    def export_clip_tuning_report(self) -> Optional[str]:
+        if not self._clip_frame_events:
+            self.log.info("Payload clip tuning report skipped: no clipping observed.")
+            return None
+
+        aggregate = dict(self._clip_aggregate_stats)
+        frames_with_clip = max(1, int(aggregate.get("frames_with_clip", 0)))
+        aggregate["avg_dropped_per_clipped_frame"] = (
+            float(aggregate.get("total_dropped", 0)) / float(frames_with_clip)
+        )
+        aggregate["avg_raw_per_clipped_frame"] = (
+            float(aggregate.get("total_raw_objects", 0)) / float(frames_with_clip)
+        )
+
+        report = {
+            "session_id": self._session_id,
+            "generated_at_epoch": int(time.time()),
+            "global_cap": max(0, self._safe_int(getattr(Settings, "RESULT_MAX_OBJECTS", 100))),
+            "base_class_quota": dict(getattr(Settings, "RESULT_CLASS_QUOTA", {})),
+            "aggregate": aggregate,
+            "frames": self._clip_frame_events,
+        }
+        tag = f"clip_tuning_report_session_{self._session_id}"
+        log_json_to_disk(report, direction="report", tag=tag)
+
+        safe_tag = "".join(ch if str(ch).isalnum() or ch in "._-" else "_" for ch in tag)[:80] or "general"
+        report_path = f"{Settings.LOG_DIR}/*_report_{safe_tag}.json"
+        self.log.info(
+            "Payload clip tuning report generated: "
+            f"frames_with_clip={aggregate.get('frames_with_clip', 0)} "
+            f"total_dropped={aggregate.get('total_dropped', 0)} path_pattern={report_path}"
+        )
+        return report_path
 
     def _build_idempotency_key(self, frame_key: str) -> str:
         prefix = str(getattr(Settings, "IDEMPOTENCY_KEY_PREFIX", "aia")).strip() or "aia"
