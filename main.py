@@ -292,6 +292,10 @@ def _mark_runtime_meta_input_quality(
 ) -> Dict[str, Any]:
     meta = dict(runtime_meta or {})
     if frame_data.get("gps_health_fallback_used"):
+        if "quality_flag" in meta:
+            meta["base_quality_flag"] = meta.get("quality_flag")
+        if "reason_code" in meta:
+            meta["base_reason_code"] = meta.get("reason_code")
         meta["quality_flag"] = "degraded_input"
         meta["reason_code"] = str(frame_data.get("gps_health_source", "fallback_ttl"))
         meta["health_source"] = str(frame_data.get("gps_health_source", "unknown"))
@@ -731,7 +735,7 @@ def run_competition(log: Logger) -> None:
                     gps_health = _smooth_mode_transition(
                         gps_health,
                         mode_transition_state,
-                        stability_frames=2,
+                        stability_frames=max(1, int(getattr(Settings, "MODE_SWITCH_STABILITY_FRAMES", 2))),
                     )
 
                     if gps_health == 1:

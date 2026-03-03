@@ -674,6 +674,15 @@ class TestGpsHealthFallbackTTL(unittest.TestCase):
         self.assertFalse(exhausted["gps_health_fallback_used"])
         self.assertEqual(exhausted["gps_health_source"], "fallback_exhausted")
 
+    def test_health_is_normalized_to_binary_when_parseable(self):
+        mgr = NetworkManager(base_url="http://test", simulation_mode=False)
+        high = {"frame_id": "f-high", "image_url": "/h.jpg", "gps_health": 9}
+        low = {"frame_id": "f-low", "image_url": "/l.jpg", "gps_health": -2}
+        self.assertTrue(mgr._validate_frame_data(high))
+        self.assertTrue(mgr._validate_frame_data(low))
+        self.assertEqual(high["gps_health"], 1)
+        self.assertEqual(low["gps_health"], 0)
+
 
 @unittest.skipUnless(NetworkManager is not None, "network deps missing")
 class TestNetworkPayloadGuard(unittest.TestCase):

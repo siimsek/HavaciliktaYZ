@@ -123,6 +123,8 @@ class Settings:
     BACKOFF_JITTER_RATIO: float = 0.25
     SEEN_FRAME_LRU_SIZE: int = 512
     IDEMPOTENCY_KEY_PREFIX: str = "aia"
+    GPS_HEALTH_FALLBACK_TTL_FRAMES: int = 3
+    MODE_SWITCH_STABILITY_FRAMES: int = 2
 
     # Circuit breaker
     CB_TRANSIENT_WINDOW_SEC: float = 30.0

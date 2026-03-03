@@ -74,7 +74,7 @@ class NetworkManager:
         self._session_id: str = str(int(time.time()))
         self._task3_references: list = []
         self._last_valid_gps_health: int = 0
-        self._gps_health_fallback_ttl_frames: int = 3
+        self._gps_health_fallback_ttl_frames: int = max(0, int(getattr(Settings, "GPS_HEALTH_FALLBACK_TTL_FRAMES", 3)))
         self._gps_health_fallback_ttl_remaining: int = 0
 
     def get_task3_references(self) -> list:
@@ -540,7 +540,7 @@ class NetworkManager:
             }:
                 gps_health_valid = False
             else:
-                parsed_health = int(float(health_val))
+                parsed_health = 1 if int(float(health_val)) > 0 else 0
         except (ValueError, TypeError):
             gps_health_valid = False
 
