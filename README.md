@@ -17,6 +17,7 @@
 
 - [Proje Hakkında](#-proje-hakkında)
 - [Mimari](#-mimari)
+- [Mimari Karar Kaydı (ADR)](#-mimari-karar-kaydi-adr)
 - [Özellikler](#-özellikler)
 - [Kurulum](#-kurulum)
 - [Kullanım](#-kullanım)
@@ -93,6 +94,11 @@ Bu proje, **TEKNOFEST 2026 Havacılıkta Yapay Zeka Yarışması** kapsamında g
 | **Test** | 45 birim testi, pytest-timeout (10s), tek dosyada (`tests/test_all.py`) |
 
 ---
+
+
+## 📌 Mimari Karar Kaydı (ADR)
+
+- [ADR-0001: Görev 3 için deep matcher entegrasyonunun ertelenmesi](docs/adr/ADR-0001-gorev3-deep-matcher-erteleme.md)
 
 ## 🚀 Kurulum
 
