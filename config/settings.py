@@ -161,6 +161,7 @@ class Settings:
     DETERMINISM_CPU_THREADS: int = 1
     MOTION_FIELD_NAME: str = "motion_status"
     PAYLOAD_CLS_AS_INT: bool = False
+    PAYLOAD_STATUS_AS_INT: bool = False
 
     # Hareket (movement_status)
     MOVEMENT_WINDOW_FRAMES: int = 24

@@ -243,3 +243,8 @@
 - Added end-to-end network smoke coverage in `tests/test_e2e_smoke_contract.py` for `start_session -> get_frame -> download_image -> send_result` flow with mocked HTTP server responses.
 - Added frame metadata contract regression checks (id fallback, frame/image URL alias normalization, and numeric coercion for GPS/translation fields).
 - Added outgoing payload contract checks to guarantee required top-level schema fields and canonical `motion_status` serialization.
+
+## 0.0.37 - 2026-03-05
+- Closed OR-2 typed-status contract risk by centralizing `landing_status` and `motion_status` serialization in `src/payload_schema.py` and defaulting outbound payload values to spec-aligned strings.
+- Added `PAYLOAD_STATUS_AS_INT` in `config/settings.py` so a final server-side schema can be adopted from one versioned switch without touching payload builders.
+- Expanded payload contract coverage in `tests/test_all.py` and `tests/test_e2e_smoke_contract.py` for both default string serialization and controlled integer override behavior.

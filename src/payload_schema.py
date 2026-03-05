@@ -69,8 +69,8 @@ class CompetitionPayloadSchema:
         out_class = int(class_id) if Settings.PAYLOAD_CLS_AS_INT else str(class_id)
         normalized = {
             "cls": out_class,
-            "landing_status": int(landing),
-            cls.CANONICAL_MOTION_FIELD: int(motion),
+            "landing_status": cls._format_status_value(landing),
+            cls.CANONICAL_MOTION_FIELD: cls._format_status_value(motion),
             "top_left_x": int(x1),
             "top_left_y": int(y1),
             "bottom_right_x": int(x2),
@@ -85,6 +85,10 @@ class CompetitionPayloadSchema:
         if v not in {"-1", "0", "1"}:
             return "-1"
         return v
+
+    @staticmethod
+    def _format_status_value(value: str) -> Any:
+        return int(value) if Settings.PAYLOAD_STATUS_AS_INT else str(value)
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
@@ -148,4 +152,3 @@ class CompetitionPayloadSchema:
             if used_alias:
                 alias_count += 1
         return normalized, alias_count
-

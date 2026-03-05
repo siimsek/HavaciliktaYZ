@@ -913,7 +913,8 @@ class TestCompetitionPayloadSchema(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("motion_status", out[0])
         self.assertNotIn("movement_status", out[0])
-        self.assertEqual(out[0]["motion_status"], 0)
+        self.assertEqual(out[0]["landing_status"], "1")
+        self.assertEqual(out[0]["motion_status"], "0")
 
     def test_settings_self_check_requires_canonical_motion_field(self):
         old = Settings.MOTION_FIELD_NAME
@@ -923,6 +924,27 @@ class TestCompetitionPayloadSchema(unittest.TestCase):
                 CompetitionPayloadSchema.self_check()
         finally:
             Settings.MOTION_FIELD_NAME = old
+
+    def test_status_fields_can_be_serialized_as_int_when_contract_requires(self):
+        old = Settings.PAYLOAD_STATUS_AS_INT
+        obj = {
+            "cls": "0",
+            "landing_status": "1",
+            "motion_status": "0",
+            "top_left_x": 1,
+            "top_left_y": 2,
+            "bottom_right_x": 20,
+            "bottom_right_y": 30,
+        }
+        try:
+            Settings.PAYLOAD_STATUS_AS_INT = True
+            out, alias_count = CompetitionPayloadSchema.canonicalize_objects([obj], frame_shape=(100, 100))
+        finally:
+            Settings.PAYLOAD_STATUS_AS_INT = old
+
+        self.assertEqual(alias_count, 0)
+        self.assertEqual(out[0]["landing_status"], 1)
+        self.assertEqual(out[0]["motion_status"], 0)
 
 
 class TestErrorPolicy(unittest.TestCase):

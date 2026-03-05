@@ -125,6 +125,8 @@ class TestNetworkSmokeAndContract(unittest.TestCase):
         obj = payload["detected_objects"][0]
         self.assertIn("motion_status", obj)
         self.assertNotIn("movement_status", obj)
+        self.assertEqual(obj["landing_status"], "-1")
+        self.assertEqual(obj["motion_status"], "0")
 
 
 if __name__ == "__main__":
