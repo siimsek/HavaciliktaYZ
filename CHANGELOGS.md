@@ -238,3 +238,8 @@
 - Added critical duplicate-threshold controls in `config/settings.py` (`TASK3_DUPLICATE_DEGRADE_RATIO`, `TASK3_DUPLICATE_DEGRADE_MIN_COUNT`) and controlled Task3 passive mode when threshold is exceeded.
 - Hardened `src/image_matcher.py` with defensive duplicate/invalid ID filtering, canonical `object_id -> reference` contract, ID lifecycle tracking (`received/validated/loaded/matched`), and validated-only match output.
 - Added Task3 ID-integrity unit/integration coverage in `tests/test_all.py` for unique IDs, duplicate quarantine, invalid ID rejection, canonical matcher ingestion, and duplicate-free match outputs.
+
+## 0.0.36 - 2026-03-05
+- Added end-to-end network smoke coverage in `tests/test_e2e_smoke_contract.py` for `start_session -> get_frame -> download_image -> send_result` flow with mocked HTTP server responses.
+- Added frame metadata contract regression checks (id fallback, frame/image URL alias normalization, and numeric coercion for GPS/translation fields).
+- Added outgoing payload contract checks to guarantee required top-level schema fields and canonical `motion_status` serialization.
