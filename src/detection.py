@@ -1,10 +1,11 @@
 """YOLOv8 nesne tespiti + iniş uygunluğu (UAP/UAİ).
 Model COCO/VisDrone vb. eğitilmiş olabilir; sınıflar TEKNOFEST (0,1,2,3) formatına map edilir."""
 
+import logging
 import os
 import unicodedata
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -21,6 +22,8 @@ class ObjectDetector:
     def __init__(self) -> None:
         self.log = Logger("Detector")
         self._frame_count: int = 0
+        self._last_guardrail_stats: Dict[str, int] = {}
+        self._temporal_filter: Optional[Any] = None
         self._use_half: bool = False
         self._class_map_mode: str = "unknown"
         self._model_class_map: Dict[int, int] = {}
@@ -55,6 +58,12 @@ class ObjectDetector:
             raise RuntimeError(f"YOLOv8 modeli yüklenemedi: {e}")
 
         self._warmup()
+
+        uap_uai_conf = getattr(Settings, "CONFIDENCE_THRESHOLD_UAP_UAI", None)
+        if uap_uai_conf is not None:
+            self.log.info(
+                f"UAP/UAİ conf eşiği: {uap_uai_conf} (Taşıt/İnsan: {Settings.CONFIDENCE_THRESHOLD})"
+            )
 
         if Settings.CLAHE_ENABLED:
             self._clahe = cv2.createCLAHE(
@@ -96,9 +105,19 @@ class ObjectDetector:
     @staticmethod
     def _map_label_to_teknofest_id(label: str) -> int:
         normalized = ObjectDetector._normalize_label(label)
-        if normalized in {"uap", "uap alan", "ucan araba park", "flying car park"}:
+        uap_aliases = {
+            "uap", "uap alan", "uap alani", "uap_alani", "ucan araba park",
+            "ucan araba park alani", "flying car park", "parking", "park",
+            "landing", "landing zone", "uap area", "flying_car_park", "2",
+        }
+        if normalized in uap_aliases:
             return Settings.CLASS_UAP
-        if normalized in {"uai", "uai alan", "uai alani", "ucan ambulans inis"}:
+        uai_aliases = {
+            "uai", "uai alan", "uai alani", "ucan ambulans inis",
+            "ucan ambulans inis alani", "ambulance", "ambulance landing",
+            "ambulance landing zone", "uai area", "ucan ambulans", "3",
+        }
+        if normalized in uai_aliases:
             return Settings.CLASS_UAI
         if normalized in {
             "insan", "human", "person", "pedestrian", "people", "man", "woman",
@@ -113,44 +132,88 @@ class ObjectDetector:
 
     def _configure_class_mapping(self) -> None:
         """Model sınıf isimlerine göre COCO/VisDrone/resmi eşleme seçer."""
-        names_raw = getattr(self.model, "names", {})
-        items: List[Tuple[int, str]] = []
-        if isinstance(names_raw, dict):
-            items = [(int(k), str(v)) for k, v in names_raw.items()]
-        elif isinstance(names_raw, list):
-            items = [(i, str(v)) for i, v in enumerate(names_raw)]
-
-        name_based_map: Dict[int, int] = {}
-        normalized_names: Dict[int, str] = {}
-        for idx, label in items:
-            normalized = self._normalize_label(label)
-            normalized_names[idx] = normalized
-            mapped = self._map_label_to_teknofest_id(label)
-            if mapped != -1:
-                name_based_map[idx] = mapped
-
-        direct_ids = [0, 1, 2, 3]
-        direct_ok = all(name_based_map.get(i, -1) == i for i in direct_ids)
-        looks_like_coco = (
-            normalized_names.get(0) == "person"
-            and normalized_names.get(1) == "bicycle"
-            and normalized_names.get(2) == "car"
-        )
-
-        if direct_ok:
-            self._class_map_mode = "official_direct"
-            self._model_class_map = {i: i for i in direct_ids}
-        elif looks_like_coco:
-            self._class_map_mode = "coco_remap"
-            self._model_class_map = dict(Settings.COCO_TO_TEKNOFEST)
+        custom_map = getattr(Settings, "CUSTOM_CLASS_MAP", None)
+        if custom_map is not None and isinstance(custom_map, dict):
+            self._class_map_mode = "custom"
+            self._model_class_map = {int(k): int(v) for k, v in custom_map.items()}
+            self.log.info("CUSTOM_CLASS_MAP kullanılıyor (config override)")
+            items = list(self._model_class_map.items())
+            items.sort(key=lambda x: x[0])
         else:
-            self._class_map_mode = "name_based"
-            self._model_class_map = name_based_map
+            names_raw = getattr(self.model, "names", {})
+            items = []  # type: List[Tuple[int, str]]
+            if isinstance(names_raw, dict):
+                items = [(int(k), str(v)) for k, v in names_raw.items()]
+            elif isinstance(names_raw, list):
+                items = [(i, str(v)) for i, v in enumerate(names_raw)]
+
+            self.log.info(f"Model sınıfları (model.names): {dict(items) if items else 'boş'}")
+
+            name_based_map: Dict[int, int] = {}
+            normalized_names: Dict[int, str] = {}
+            for idx, label in items:
+                normalized = self._normalize_label(str(label))
+                normalized_names[idx] = normalized
+                mapped = self._map_label_to_teknofest_id(str(label))
+                if mapped != -1:
+                    name_based_map[idx] = mapped
+
+            direct_ids = [0, 1, 2, 3]
+            direct_ok = all(name_based_map.get(i, -1) == i for i in direct_ids)
+            num_classes = len(items)
+            has_uap_uai_in_name_based = (
+                Settings.CLASS_UAP in name_based_map.values()
+                or Settings.CLASS_UAI in name_based_map.values()
+            )
+            looks_like_coco = (
+                num_classes >= 3
+                and normalized_names.get(0) == "person"
+                and normalized_names.get(1) == "bicycle"
+                and normalized_names.get(2) == "car"
+                and not (num_classes <= 10 and has_uap_uai_in_name_based)
+            )
+
+            if direct_ok:
+                self._class_map_mode = "official_direct"
+                self._model_class_map = {i: i for i in direct_ids}
+            elif looks_like_coco:
+                self._class_map_mode = "coco_remap"
+                self._model_class_map = dict(Settings.COCO_TO_TEKNOFEST)
+            else:
+                self._class_map_mode = "name_based"
+                self._model_class_map = name_based_map
+
+        teknofest_names = {0: "Taşıt", 1: "İnsan", 2: "UAP", 3: "UAİ"}
+        log_items: List[Tuple[int, str]] = []
+        for idx in sorted(self._model_class_map.keys()):
+            label_str = ""
+            if hasattr(self.model, "names"):
+                names = getattr(self.model, "names", {})
+                if isinstance(names, dict):
+                    label_str = str(names.get(idx, idx))
+                elif isinstance(names, (list, tuple)) and 0 <= idx < len(names):
+                    label_str = str(names[idx])
+            if not label_str:
+                label_str = str(idx)
+            log_items.append((idx, label_str))
 
         self.log.info(
             f"Sınıf eşleme modu: {self._class_map_mode} "
             f"(tanınan model sınıfı: {len(self._model_class_map)})"
         )
+        for idx, label in log_items:
+            tf_id = self._model_class_map.get(idx, -1)
+            tf_name = teknofest_names.get(tf_id, "UNMAPPED")
+            marker = "✓" if tf_id != -1 else "✗"
+            self.log.info(
+                f"  {marker} Model sınıf {idx}: '{label}' → TEKNOFEST {tf_id} ({tf_name})"
+            )
+        has_uap = Settings.CLASS_UAP in self._model_class_map.values()
+        has_uai = Settings.CLASS_UAI in self._model_class_map.values()
+        if not has_uap:
+            self.log.warn("⚠ Model UAP (class 2) sınıfı İÇERMİYOR — UAP tespiti yapılamaz!")
+        if not has_uai:
+            self.log.warn("⚠ Model UAİ (class 3) sınıfı İÇERMİYOR — UAİ tespiti yapılamaz!")
 
     def _map_model_class_to_teknofest(self, model_cls_id: int) -> int:
         return self._model_class_map.get(model_cls_id, -1)
@@ -209,9 +272,12 @@ class ObjectDetector:
                 ),
             }
 
+        conf_global = float(Settings.CONFIDENCE_THRESHOLD)
+        conf_uap_uai = getattr(Settings, "CONFIDENCE_THRESHOLD_UAP_UAI", None)
+        conf_infer = min(conf_global, conf_uap_uai) if conf_uap_uai is not None else conf_global
         return {
             "imgsz": int(Settings.INFERENCE_SIZE),
-            "conf": float(Settings.CONFIDENCE_THRESHOLD),
+            "conf": float(conf_infer),
             "iou": float(Settings.NMS_IOU_THRESHOLD),
             "max_det": int(Settings.MAX_DETECTIONS),
             "augment": bool(Settings.AUGMENTED_INFERENCE),
@@ -220,7 +286,7 @@ class ObjectDetector:
             "hybrid_iou": float(getattr(Settings, "HYBRID_NMS_IOU_THRESHOLD", 0.65)),
         }
 
-    def detect(self, frame: np.ndarray, runtime_profile: str = "default") -> List[Dict]:
+    def detect(self, frame: np.ndarray, runtime_profile: str = "default", **kwargs) -> List[Dict]:
         try:
             inference_cfg = self._build_inference_config(runtime_profile)
             processed = self._preprocess(frame)
@@ -233,19 +299,48 @@ class ObjectDetector:
             raw_detections = self._apply_runtime_nms(
                 raw_detections, inference_cfg=inference_cfg
             )
-            raw_detections = self._post_filter(raw_detections)
+            raw_detections = self._post_filter(raw_detections, altitude=kwargs.get("altitude"))
+            
+            try:
+                from src.postprocess import apply_guardrails
+                raw_detections, self._last_guardrail_stats = apply_guardrails(raw_detections)
+            except ImportError:
+                self._last_guardrail_stats = {}
+
+            if getattr(Settings, "TEMPORAL_FILTER_ENABLED", True):
+                try:
+                    from src.temporal_filter import TemporalConsistencyFilter
+                    if self._temporal_filter is None:
+                        self._temporal_filter = TemporalConsistencyFilter()
+                    raw_detections = self._temporal_filter.filter(raw_detections)
+                except ImportError:
+                    pass
+
             frame_h, frame_w = frame.shape[:2]
-            final_detections = self._determine_landing_status(
-                raw_detections, frame_w, frame_h
-            )
+            try:
+                from src.uap_uai import determine_landing_status
+                final_detections = determine_landing_status(
+                    raw_detections, frame_w, frame_h, frame
+                )
+            except ImportError:
+                final_detections = raw_detections
 
             output: List[Dict] = []
+            conf_tasit_insan = float(Settings.CONFIDENCE_THRESHOLD)
             for det in final_detections:
                 if det["cls_int"] == -1:
                     continue
+                if det["cls_int"] in (Settings.CLASS_TASIT, Settings.CLASS_INSAN):
+                    if det["confidence"] < conf_tasit_insan:
+                        continue
+                # Şartname: motion_status → Taşıt(0)=0/1, İnsan(1)=-1, UAP(2)=-1, UAİ(3)=-1
+                # Varsayılan -1; MovementEstimator.annotate() taşıtlar için sonra günceller
+                cls_id = det["cls_int"]
+                default_motion = "-1"
                 output.append({
                     "cls": det["cls"],
                     "landing_status": det["landing_status"],
+                    "motion_status": default_motion,
                     "top_left_x": det["top_left_x"],
                     "top_left_y": det["top_left_y"],
                     "bottom_right_x": det["bottom_right_x"],
@@ -395,10 +490,10 @@ class ObjectDetector:
                     "cls": str(tf_id),
                     "source_cls_id": model_cls_id,
                     "confidence": int(conf * 10000) / 10000,
-                    "top_left_x": int(x1),
-                    "top_left_y": int(y1),
-                    "bottom_right_x": int(x2),
-                    "bottom_right_y": int(y2),
+                    "top_left_x": round(x1, 2),
+                    "top_left_y": round(y1, 2),
+                    "bottom_right_x": round(x2, 2),
+                    "bottom_right_y": round(y2, 2),
                     "bbox": (x1, y1, x2, y2),
                 })
         return detections
@@ -570,49 +665,85 @@ class ObjectDetector:
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
         result = frame
+        
+        # Otonom Adaptif CLAHE ve Termal/RGB kontrolü
         if self._clahe is not None:
-            lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
-            l_channel, a_channel, b_channel = cv2.split(lab)
+            # Check if thermal (single channel disguised as 3 or actually 1)
+            is_thermal = False
+            if len(frame.shape) == 2:
+                is_thermal = True
+            elif len(frame.shape) == 3 and frame.shape[2] == 3:
+                # If R, G, B channels are highly correlated/identical, it's likely grayscale/thermal
+                b, g, r = cv2.split(frame)
+                diff_bg = cv2.absdiff(b, g)
+                diff_gr = cv2.absdiff(g, r)
+                if cv2.mean(diff_bg)[0] < 2.0 and cv2.mean(diff_gr)[0] < 2.0:
+                    is_thermal = True
 
-            l_enhanced = self._clahe.apply(l_channel)
+            mean_brightness = np.mean(frame)
+            # Apply CLAHE if it's thermal OR if it's RGB but too dark/foggy (low contrast)
+            if is_thermal:
+                gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else result
+                enhanced = self._clahe.apply(gray)
+                result = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+            elif mean_brightness < 90.0 or mean_brightness > 200.0: # Too dark (night) or too washed out (fog/snow)
+                lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+                l_channel, a_channel, b_channel = cv2.split(lab)
+                l_enhanced = self._clahe.apply(l_channel)
+                lab_enhanced = cv2.merge([l_enhanced, a_channel, b_channel])
+                result = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+            
+            # If RGB and normal brightness, skip CLAHE to save CPU and prevent artifacts
 
-            lab_enhanced = cv2.merge([l_enhanced, a_channel, b_channel])
-            result = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
-
+        # Hafif keskinleştirme (bulanklık toleransı - FR-007)
         blurred = cv2.GaussianBlur(result, (0, 0), sigmaX=2.0)
         result = cv2.addWeighted(result, 1.3, blurred, -0.3, 0)
 
         return result
 
     @staticmethod
-    def _post_filter(detections: List[Dict]) -> List[Dict]:
+    def _post_filter(detections: List[Dict], altitude: Optional[float] = None) -> List[Dict]:
         filtered: List[Dict] = []
         class_filters = getattr(Settings, "CLASS_ADAPTIVE_FILTERS", {}) or {}
         default_min_size = max(1, int(Settings.MIN_BBOX_SIZE))
-        default_max_size = max(default_min_size, int(Settings.MAX_BBOX_SIZE))
+        default_max_size = max(default_min_size, int(getattr(Settings, "MAX_BBOX_SIZE", 9999)))
         default_max_aspect = 4.5
+        
+        # Scale thresholds based on altitude (reference 50m)
+        # Closer to ground (lower altitude) = larger boxes expected
+        scale_factor = 1.0
+        if altitude is not None and altitude > 1.0:
+            ref_altitude = getattr(Settings, "DEFAULT_ALTITUDE", 50.0)
+            scale_factor = ref_altitude / max(5.0, altitude)
 
+        post_filter_exempt = frozenset(str(c) for c in getattr(Settings, "GUARDRAIL_EXEMPT_CLASSES", ("2", "3")))
         for det in detections:
+            cls_key = str(det.get("cls_int", det.get("cls", "")))
+            if cls_key in post_filter_exempt:
+                filtered.append(det)
+                continue
+
             x1, y1, x2, y2 = det["bbox"]
             w = x2 - x1
             h = y2 - y1
 
-            cls_key = str(det.get("cls_int", det.get("cls", "")))
             cfg = class_filters.get(cls_key, {})
-            min_size = max(1, int(cfg.get("min_size", default_min_size)))
-            max_size = max(min_size, int(cfg.get("max_size", default_max_size)))
+            base_min = max(1, int(cfg.get("min_size", default_min_size)))
+            base_max = max(base_min, int(cfg.get("max_size", default_max_size)))
+            min_size = base_min * scale_factor
+            default_min_floor = max(1, int(getattr(Settings, "MIN_BBOX_SIZE_FLOOR", 8)))
+            min_floor = max(1, int(cfg.get("min_floor", default_min_floor)))
+            min_size = max(min_floor, min_size)
+            max_size = base_max * scale_factor
             max_aspect = float(cfg.get("max_aspect", default_max_aspect))
 
             if w < min_size or h < min_size:
                 continue
-
             if w > max_size or h > max_size:
                 continue
-
             aspect = max(w, h) / max(min(w, h), 1)
             if aspect > max_aspect:
                 continue
-
             filtered.append(det)
 
         return filtered
@@ -639,174 +770,8 @@ class ObjectDetector:
         return inter_area / union
 
     # =========================================================================
-    #  İNİŞ UYGUNLUĞU (LANDING STATUS) MANTIĞI
-    # =========================================================================
 
-    def _determine_landing_status(
-        self,
-        detections: List[Dict],
-        frame_w: int,
-        frame_h: int,
-    ) -> List[Dict]:
-        """Şartname 4.6: Taşıt/İnsan=-1, UAP/UAİ için kenar/engel/proximity kontrolü → 0 veya 1"""
-        # UAP/UAİ dışındaki tüm nesneler engel; IoU yerine intersection/landing_area kullanılır
-        # Şartname: "tespit edilen veya tespit edilemeyen herhangi bir nesne"
-        # UNKNOWN_OBJECTS_AS_OBSTACLES şartname gereği her zaman True kabul edilir.
-        landing_zone_ids = (Settings.CLASS_UAP, Settings.CLASS_UAI)
-        obstacles: List[Tuple[float, float, float, float]] = []
-        for det in detections:
-            if det["cls_int"] not in landing_zone_ids:
-                obstacles.append(det["bbox"])
 
-        for det in detections:
-            cls_id = det["cls_int"]
-
-            if cls_id in (Settings.CLASS_TASIT, Settings.CLASS_INSAN):
-                det["landing_status"] = Settings.LANDING_NOT_AREA
-
-            elif cls_id in landing_zone_ids:
-                bbox = det["bbox"]
-
-                # (a) Alan kadrajın kenarına değiyor mu? EDGE_MARGIN_RATIO ile çözünürlüğe orantılı.
-                if self._is_touching_edge(bbox, frame_w, frame_h):
-                    det["landing_status"] = Settings.LANDING_NOT_SUITABLE
-                    self.log.debug("  UAP/UAİ kenar temas → uygun değil")
-                    continue
-
-                # (b) Doğrudan engel örtüşme kontrolü
-                has_obstacle = self._check_obstacle_overlap(
-                    bbox, obstacles, Settings.LANDING_IOU_THRESHOLD
-                )
-
-                # (c) Perspektif proximity kontrolü — genişletilmiş bbox
-                # Şartname 4.6: "Çekim açısına bağlı yanıltıcı durumda
-                # alana yakın cisim alanda gibi görünebilir"
-                if not has_obstacle and Settings.LANDING_PROXIMITY_MARGIN > 0:
-                    expanded = self._expand_bbox(
-                        bbox, Settings.LANDING_PROXIMITY_MARGIN
-                    )
-                    has_obstacle = self._check_obstacle_overlap(
-                        expanded, obstacles, Settings.LANDING_IOU_THRESHOLD
-                    )
-                    if has_obstacle:
-                        self.log.debug(
-                            "  UAP/UAİ perspektif proximity engeli → uygun değil"
-                        )
-
-                if has_obstacle:
-                    det["landing_status"] = Settings.LANDING_NOT_SUITABLE
-                else:
-                    # (d) Alan tamamen kadrajda, engelsiz, proximity temiz → uygun
-                    det["landing_status"] = Settings.LANDING_SUITABLE
-                    self.log.debug("  UAP/UAİ → iniş uygun ✓")
-
-            else:
-                det["landing_status"] = Settings.LANDING_NOT_AREA
-
-        return detections
-
-    # =========================================================================
-    #  ENGEL ÖRTÜŞME KONTROL YARDIMCILARI
-    # =========================================================================
-
-    @staticmethod
-    def _check_obstacle_overlap(
-        landing_bbox: Tuple[float, float, float, float],
-        obstacles: List[Tuple[float, float, float, float]],
-        threshold: float,
-    ) -> bool:
-        """
-        İniş alanı ile engel listesi arasında eşik üstü kesişim olup olmadığını kontrol eder.
-
-        Args:
-            landing_bbox: İniş alanı (x1, y1, x2, y2).
-            obstacles: Engel bbox listesi.
-            threshold: Minimum overlap oranı (0.0 = herhangi bir piksel).
-
-        Returns:
-            Engel bulunduysa True.
-        """
-        for obs_bbox in obstacles:
-            overlap = ObjectDetector._intersection_over_area(
-                landing_bbox, obs_bbox
-            )
-            if overlap > 0.0:  # Şartname 4.6 gereği en ufak bir kesişim "Uygun Değil" yapar
-                return True
-        return False
-
-    @staticmethod
-    def _expand_bbox(
-        bbox: Tuple[float, float, float, float],
-        margin_ratio: float,
-    ) -> Tuple[float, float, float, float]:
-        """
-        Bounding box'ı her yönde margin_ratio oranında genişletir.
-
-        Perspektif kaynaklı yanılgıları yakalamak için iniş alanı
-        bbox'ı genişletilerek yakın nesneler kontrol edilir.
-
-        Args:
-            bbox: Orijinal (x1, y1, x2, y2).
-            margin_ratio: Genişletme oranı (0.15 = %15 her yönde).
-
-        Returns:
-            Genişletilmiş (x1, y1, x2, y2).
-        """
-        x1, y1, x2, y2 = bbox
-        w = x2 - x1
-        h = y2 - y1
-        dx = w * margin_ratio
-        dy = h * margin_ratio
-        return (x1 - dx, y1 - dy, x2 + dx, y2 + dy)
-
-    # =========================================================================
-    #  KESİŞİM HESAPLAMA
-    # =========================================================================
-
-    @staticmethod
-    def _intersection_over_area(
-        landing_box: Tuple[float, float, float, float],
-        obstacle_box: Tuple[float, float, float, float],
-    ) -> float:
-        """
-        İniş alanı ile engel arasındaki kesişimin, iniş alanına oranını hesaplar.
-
-        Bu, standart IoU'dan farklıdır: küçük bir engel (insan) büyük bir iniş
-        alanının üzerinde olsa bile IoU çok düşük çıkar. Ancak bu hesaplama
-        iniş alanının ne kadarının engelle örtüştüğünü doğru ölçer.
-
-        Formül:
-            overlap_ratio = intersection_area / landing_area
-
-        Args:
-            landing_box: İniş alanı (x1, y1, x2, y2).
-            obstacle_box: Engel nesnesi (x1, y1, x2, y2).
-
-        Returns:
-            0.0 ile 1.0 arasında kesişim oranı.
-        """
-        # Kesişim alanının köşeleri
-        inter_x1 = max(landing_box[0], obstacle_box[0])
-        inter_y1 = max(landing_box[1], obstacle_box[1])
-        inter_x2 = min(landing_box[2], obstacle_box[2])
-        inter_y2 = min(landing_box[3], obstacle_box[3])
-
-        # Kesişim alanı
-        inter_w = max(0.0, inter_x2 - inter_x1)
-        inter_h = max(0.0, inter_y2 - inter_y1)
-        inter_area = inter_w * inter_h
-        if inter_area <= 0:
-            return 0.0
-
-        # İniş alanının yüzölçümü
-        landing_w = max(0.0, landing_box[2] - landing_box[0])
-        landing_h = max(0.0, landing_box[3] - landing_box[1])
-        landing_area = landing_w * landing_h
-
-        if landing_area <= 0:
-            return 0.0
-
-        return inter_area / landing_area
 
     # =========================================================================
     #  KENAR TEMAS KONTROLÜ

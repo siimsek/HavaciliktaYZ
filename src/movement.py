@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.frame_context import FrameContext
+    from src.utils import FrameContext
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ class _Track:
     history: Deque[Tuple[float, float, float, float]] = field(default_factory=deque)
     missed: int = 0
     last_status: str = "0"
+    last_box: Optional[Tuple[float, float, float, float]] = None
 
 
 class MovementEstimator:
@@ -70,7 +71,7 @@ class MovementEstimator:
             return detections
 
         centers = {idx: self._center(det) for idx, det in vehicles}
-        assignments = self._match(centers)
+        assignments = self._match(vehicles)
         matched_track_ids = set(assignments.values())
         self._age_tracks(matched_track_ids)
 
@@ -80,6 +81,9 @@ class MovementEstimator:
                 track_id = self._create_track(centers[idx])
             track = self._tracks[track_id]
             cx, cy = centers[idx]
+
+            from src.postprocess import _bbox
+            track.last_box = _bbox(det)
 
             if not self._is_frozen_frame:
                 track.history.append((cx, cy, self._cam_total_x, self._cam_total_y))
@@ -100,6 +104,16 @@ class MovementEstimator:
         n = len(history)
         scale = self._frame_width / Settings.MOVEMENT_THRESHOLD_REF_WIDTH
         threshold = Settings.MOVEMENT_THRESHOLD_PX * scale
+
+        # Adaptif eşik: büyük kamera pan/tilt'ta eşiği artır
+        if getattr(Settings, "MOVEMENT_ADAPTIVE_PAN_ENABLED", False) and self._cam_shift_hist:
+            total_mag = sum(abs(dx) + abs(dy) for dx, dy in self._cam_shift_hist)
+            avg_mag = total_mag / len(self._cam_shift_hist)
+            pan_px = float(getattr(Settings, "MOVEMENT_ADAPTIVE_PAN_PX", 15.0))
+            if avg_mag > pan_px:
+                factor = float(getattr(Settings, "MOVEMENT_ADAPTIVE_PAN_FACTOR", 1.35))
+                threshold = threshold * factor
+
         early_ratio = max(0.1, float(getattr(Settings, "MOVEMENT_EARLY_SIGNAL_RATIO", 0.75)))
         hysteresis_ratio = max(0.1, float(getattr(Settings, "MOVEMENT_HYSTERESIS_RATIO", 0.65)))
         move_on_threshold = threshold
@@ -136,22 +150,40 @@ class MovementEstimator:
             return "1" if max_dist >= move_off_threshold else "0"
         return "1" if max_dist >= move_on_threshold else "0"
 
-    def _match(self, centers: Dict[int, Tuple[float, float]]) -> Dict[int, int]:
+    def _match(self, vehicles: List[Tuple[int, Dict]]) -> Dict[int, int]:
         assignments: Dict[int, int] = {}
         if not self._tracks:
             return assignments
 
         candidates: List[Tuple[float, int, int]] = []
-        for det_idx, (cx, cy) in centers.items():
-            for track_id, track in self._tracks.items():
-                if not track.history:
-                    continue
-                tx, ty = track.history[-1][:2]
-                dx = cx - tx
-                dy = cy - ty
-                dist = (dx * dx + dy * dy) ** 0.5
-                if dist <= Settings.MOVEMENT_MATCH_DISTANCE_PX:
-                    candidates.append((dist, det_idx, track_id))
+        algo = getattr(Settings, "MOTION_ALGO", "flow").lower()
+
+        if algo == "iou_tracker":
+            # Experimental: Can be integrated if needed, fallback to distance match for now.
+            # But let's actually implement a basic IoU matching here
+            from src.postprocess import _iou, _bbox
+            for det_idx, det in vehicles:
+                det_box = _bbox(det)
+                for track_id, track in self._tracks.items():
+                    if not getattr(track, 'last_box', None):
+                        continue
+                    iou = _iou(det_box, track.last_box)
+                    if iou > 0.1:  # Simple threshold
+                        # use 1 - iou as distance so lower is better matches the sorting later
+                        candidates.append((1.0 - iou, det_idx, track_id))
+        else:
+            # Standard distance match
+            for det_idx, det in vehicles:
+                cx, cy = self._center(det)
+                for track_id, track in self._tracks.items():
+                    if not track.history:
+                        continue
+                    tx, ty = track.history[-1][:2]
+                    dx = cx - tx
+                    dy = cy - ty
+                    dist = (dx * dx + dy * dy) ** 0.5
+                    if dist <= Settings.MOVEMENT_MATCH_DISTANCE_PX:
+                        candidates.append((dist, det_idx, track_id))
 
         used_dets = set()
         used_tracks = set()
@@ -193,7 +225,7 @@ class MovementEstimator:
 
     def _estimate_camera_shift(self, frame_ctx: "FrameContext") -> Tuple[float, float]:
         if isinstance(frame_ctx, np.ndarray):
-            from src.frame_context import FrameContext
+            from src.utils import FrameContext
             frame_ctx = FrameContext(frame_ctx)
         gray = frame_ctx.gray
         if self._prev_gray is None:
@@ -262,20 +294,34 @@ class MovementEstimator:
             )
             return 0.0, 0.0
 
-        deltas = new - old
-        dx = deltas[:, 0]
-        dy = deltas[:, 1]
+        # Calculate shift based on chosen algorithm
+        algo = getattr(Settings, "MOTION_ALGO", "flow").lower()
 
-        low, high = 10, 90
-        dx_l, dx_h = np.percentile(dx, [low, high])
-        dy_l, dy_h = np.percentile(dy, [low, high])
-        keep = (dx >= dx_l) & (dx <= dx_h) & (dy >= dy_l) & (dy <= dy_h)
-        if np.count_nonzero(keep) >= 5:
-            dx = dx[keep]
-            dy = dy[keep]
-
-        cam_dx = float(np.median(dx))
-        cam_dy = float(np.median(dy))
+        if algo == "homography" and len(new) >= 10:
+            # Use RANSAC Homography for robust global camera motion estimation
+            H, mask = cv2.findHomography(old, new, cv2.RANSAC, 3.0)
+            if H is not None:
+                # Extract pure translation from the 3x3 homography matrix
+                cam_dx = float(H[0, 2])
+                cam_dy = float(H[1, 2])
+            else:
+                cam_dx = cam_dy = 0.0
+        else:
+            # Standard median optical flow (fallback/default)
+            deltas = new - old
+            dx = deltas[:, 0]
+            dy = deltas[:, 1]
+    
+            low, high = 10, 90
+            dx_l, dx_h = np.percentile(dx, [low, high])
+            dy_l, dy_h = np.percentile(dy, [low, high])
+            keep = (dx >= dx_l) & (dx <= dx_h) & (dy >= dy_l) & (dy <= dy_h)
+            if np.count_nonzero(keep) >= 5:
+                dx = dx[keep]
+                dy = dy[keep]
+    
+            cam_dx = float(np.median(dx))
+            cam_dy = float(np.median(dy))
 
         self._prev_gray = gray
         self._prev_points = new.reshape(-1, 1, 2)

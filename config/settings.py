@@ -2,6 +2,7 @@
 BASE_URL, TEAM_NAME, kamera parametreleri buradan güncellenir."""
 
 from pathlib import Path
+from typing import Optional
 import os
 
 
@@ -29,6 +30,8 @@ class Settings:
     CONFIDENCE_THRESHOLD: float = (
         0.40  # 0.0-1.0, düşük = daha fazla tespit (noise riski)
     )
+    # UAP/UAİ için düşük eşik — model bazen daha düşük conf ile tespit eder
+    CONFIDENCE_THRESHOLD_UAP_UAI: Optional[float] = 0.28  # None = global eşik kullan
     NMS_IOU_THRESHOLD: float = 0.15  # Çakışan kutuları bastırma eşiği
     NMS_MODE: str = "class_aware"  # class_aware|agnostic|hybrid
     HYBRID_NMS_IOU_THRESHOLD: float = 0.65
@@ -44,13 +47,31 @@ class Settings:
     CLAHE_CLIP_LIMIT: float = 2.0
     CLAHE_TILE_SIZE: int = 8
     MIN_BBOX_SIZE: int = 20
-    MAX_BBOX_SIZE: int = 9999
+    MIN_BBOX_SIZE_FLOOR: int = 8  # Yüksek irtifada min_size bu değerin altına düşmez
     CLASS_ADAPTIVE_FILTERS: dict = {
-        "0": {"min_size": 20, "max_aspect": 6.0},  # Tasit
-        "1": {"min_size": 12, "max_aspect": 5.5},  # Insan
-        "2": {"min_size": 24, "max_aspect": 2.5},  # UAP
-        "3": {"min_size": 24, "max_aspect": 2.5},  # UAI
+        "0": {"min_size": 20, "max_size": 600, "max_aspect": 4.5},  # Taşıt (çatıları engeller)
+        "1": {"min_size": 15, "max_size": 160, "max_aspect": 4.0},  # İnsan (direk/ağaç engeller)
+        "2": {"min_size": 12, "max_size": 1000, "max_aspect": 2.5, "min_floor": 6},  # UAP
+        "3": {"min_size": 12, "max_size": 1000, "max_aspect": 2.5, "min_floor": 6},  # UAİ
     }
+
+    # Guardrails (postprocess): overlap, scene consistency, crowd adaptivity
+    GUARDRAILS_ENABLED: bool = True
+    GUARDRAIL_EXEMPT_CLASSES: tuple = ("2", "3")  # UAP, UAİ — modele güven, bastırma
+    GUARDRAIL_OVERLAP_AREA_RATIO: float = 5.0
+    GUARDRAIL_OVERLAP_IOU: float = 0.15
+    GUARDRAIL_SCENE_OUTLIER_FACTOR: float = 8.0
+    GUARDRAIL_SCENE_MIN_SAMPLES: int = 3
+    GUARDRAIL_CROWD_THRESHOLD: int = 30
+    GUARDRAIL_CROWD_CONF_BOOST: float = 0.15
+
+    # Zamansal tutarlılık (anlık FP bastırma): en az K kare görünen tespitler kabul
+    TEMPORAL_FILTER_ENABLED: bool = True
+    TEMPORAL_FILTER_MIN_APPEARANCES: int = 2
+    TEMPORAL_FILTER_WINDOW_FRAMES: int = 5
+    TEMPORAL_FILTER_IOU_THRESHOLD: float = 0.3
+    TEMPORAL_FILTER_CONFIDENCE_EXEMPT: float = 0.7
+    TEMPORAL_FILTER_EXEMPT_CLASSES: tuple = ("2", "3")  # UAP, UAİ — şartname zorunlu
 
     # SAHI: Görüntüyü parçalara böl, küçük nesneleri (drone tepeden bakış) yakala
     SAHI_ENABLED: bool = True
@@ -85,6 +106,12 @@ class Settings:
     CLASS_INSAN: int = 1  # İnsan
     CLASS_UAP: int = 2  # Uçan Araba Park Alanı
     CLASS_UAI: int = 3  # Uçan Ambulans İniş Alanı
+
+    # Model sınıf eşlemesi manuel override (model ID → TEKNOFEST ID)
+    # Eğitilmiş 4 sınıflı model (Taşıt, İnsan, UAP, UAİ) için doğrudan eşleme:
+    # CUSTOM_CLASS_MAP = {0: 0, 1: 1, 2: 2, 3: 3}
+    # Logda "Model UAP/UAİ sınıfı İÇERMİYOR" görüyorsanız bu ayarı ekleyin.
+    CUSTOM_CLASS_MAP: Optional[dict] = None
 
     # İniş Durumu Kodları
     LANDING_NOT_AREA: str = "-1"  # İniş alanı değil (Taşıt/İnsan)
@@ -122,6 +149,7 @@ class Settings:
 
     EDGE_MARGIN_RATIO: float = 0.004  # UAP/UAİ kadraj kenarına değiyorsa → uygun değil
     UNKNOWN_OBJECTS_AS_OBSTACLES: bool = True
+    UAP_CV_VERIFICATION: bool = False  # UAP/UAİ Hough daire doğrulaması
 
     LANDING_ZONE_CONTAINMENT_IOU: float = 0.70
 
@@ -173,7 +201,12 @@ class Settings:
     DATASETS_DIR: str = os.path.join(str(PROJECT_ROOT), "datasets")
     # datasets/ recursive taranır, sadece uzantıya göre eşleşen dosyalar alınır
     IMAGE_EXTENSIONS: tuple = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+    VIDEO_EXTENSIONS: tuple = (".mp4", ".avi", ".mov", ".mkv")
     SIMULATION_DET_SAMPLE_SIZE: int = 100
+    # GPS sağlıksızken video duraklatma (Show window modunda SPACE ile devam)
+    SIMULATION_PAUSE_ON_GPS_LOSS: bool = False
+    # True: Simülasyonda GPS=1 olsa bile gps_health=0 simüle et (görsel odometri her zaman çalışsın)
+    SIMULATION_FORCE_GPS_UNHEALTHY: bool = True
 
     # Performans
     FPS_REPORT_INTERVAL: int = 10
@@ -182,6 +215,7 @@ class Settings:
     LOOP_DELAY: float = 0.0
     GPU_CLEANUP_INTERVAL: int = 200
     DEBUG_SAVE_INTERVAL: int = 50
+    MAP_MAX_TRAJECTORY_LENGTH: int = 500  # Mini-map trajectory buffer (performans)
     ENABLE_JSON_LOGGING: bool = True
     JSON_LOG_EVERY_N_FRAMES: int = 10
     DYNAMIC_JSON_LOG_INTERVAL_ENABLED: bool = True
@@ -213,14 +247,18 @@ class Settings:
     PAYLOAD_ADAPTER_VERSION: str = "v1"  # v1|v1_legacy|v2_int
 
     # Hareket (movement_status)
+    MOTION_ALGO: str = "homography"  # flow | homography | iou_tracker
     MOVEMENT_WINDOW_FRAMES: int = 24
     MOVEMENT_MIN_HISTORY: int = 6
-    MOVEMENT_THRESHOLD_PX: float = 12.0
+    MOVEMENT_THRESHOLD_PX: float = 24.0
     MOVEMENT_EARLY_SIGNAL_RATIO: float = 0.75
     MOVEMENT_HYSTERESIS_RATIO: float = 0.65
     MOVEMENT_MATCH_DISTANCE_PX: float = 80.0
     MOVEMENT_MAX_MISSED_FRAMES: int = 8
     MOVEMENT_THRESHOLD_REF_WIDTH: int = 1920
+    MOVEMENT_ADAPTIVE_PAN_ENABLED: bool = True
+    MOVEMENT_ADAPTIVE_PAN_PX: float = 15.0  # Ortalama kamera kayması/frame bu değeri aşarsa eşik artar
+    MOVEMENT_ADAPTIVE_PAN_FACTOR: float = 1.35  # Büyük pan/tilt'ta eşik çarpanı (1.2–1.5)
     FROZEN_FRAME_DIFF_THRESHOLD: float = 1.0
     MOTION_COMP_ENABLED: bool = True
     MOTION_COMP_MIN_FEATURES: int = 40
@@ -228,6 +266,18 @@ class Settings:
     MOTION_COMP_QUALITY_LEVEL: float = 0.01
     MOTION_COMP_MIN_DISTANCE: int = 20
     MOTION_COMP_WIN_SIZE: int = 21
+
+    # Visual Odometry (GPS=0): piksel→metre işaret düzeltmesi (drift azaltma)
+    # İleri gidince haritada geri görünüyorsa VO_SIGN_Y veya VO_SIGN_X'i 1 yapın
+    VO_SIGN_X: int = -1  # 1 veya -1; kamera koordinat dönüşümü
+    VO_SIGN_Y: int = 1  # 1 veya -1; ileri hareket haritada doğru yön için 1
+    # Rotasyon (pan/yaw) tespiti: kamera dönerken pozisyon güncellemesini bastır
+    VO_ROTATION_SUPPRESS_ENABLED: bool = True
+    VO_ROTATION_DOT_THRESHOLD: float = 0.4  # Bu altında = rotasyon, güncelleme yapma
+    VO_MAX_DISPLACEMENT_PER_FRAME: float = 1.0  # Kare başına max metre (drift sınırlama)
+    VO_OUTLIER_IQR_FACTOR: float = 1.5  # IQR çarpanı; 0 = devre dışı
+    # Şartname: GPS=0'da yalnızca görsel ölçüm kullanılır; ölçüm yoksa pozisyon değiştirme
+    GPS_ZERO_POSITION_FREEZE: bool = True  # True = ölçüm yoksa pozisyon dondur
 
     # GPS=0 latency compensation (feature flag)
     LATENCY_COMP_ENABLED: bool = True

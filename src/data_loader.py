@@ -32,12 +32,49 @@ def _group_by_directory(paths: List[str]) -> Dict[str, List[str]]:
     return dict(groups)
 
 
+def get_available_sequences() -> Dict[str, Dict[str, Any]]:
+    """Scan datasets/ for image sequences (folders with >=2 images) and video files."""
+    datasets_dir = Settings.DATASETS_DIR
+    if not os.path.isdir(datasets_dir):
+        return {}
+
+    img_exts = tuple(e.lower() for e in Settings.IMAGE_EXTENSIONS)
+    vid_exts = tuple(e.lower() for e in Settings.VIDEO_EXTENSIONS)
+
+    all_images = []
+    videos = []
+
+    for dirpath, _, filenames in os.walk(datasets_dir):
+        for f in filenames:
+            ext = f.lower()
+            if ext.endswith(img_exts):
+                all_images.append(os.path.join(dirpath, f))
+            elif ext.endswith(vid_exts):
+                videos.append(os.path.join(dirpath, f))
+
+    groups = _group_by_directory(all_images)
+    sequences = {}
+
+    for k, v in groups.items():
+        if len(v) >= 2:
+            name = os.path.basename(k)
+            sequences[name] = {"type": "image_sequence", "path": k, "count": len(v), "files": sorted(v)}
+
+    for v in videos:
+        name = os.path.basename(v)
+        sequences[name] = {"type": "video", "path": v, "count": "vid_file"}
+
+    return sequences
+
+
 class DatasetLoader:
     """datasets/ recursive taranır, uzantıya göre (.jpg, .png vb.) tüm görüntüler bulunur."""
 
     def __init__(self, prefer_vid: bool = True, seed: Optional[int] = None, sequence: Optional[str] = None) -> None:
         self.log = Logger("DataLoader")
-        self._frames: List[str] = []
+        self._frames: List[str] = []  # Paths for image sequences, or empty if video file
+        self._video_capture: Optional[cv2.VideoCapture] = None
+        self._video_total_frames: int = 0
         self._index: int = 0
         self._mode: str = "unknown"
         self._sequence_name: str = ""
@@ -76,34 +113,45 @@ class DatasetLoader:
             )
 
     def _load_video_sequence(self, all_images: List[str], sequence: Optional[str] = None) -> None:
-        """En çok görüntü içeren klasörü sekans olarak seç (veya sequence adıyla eşleşen)."""
-        groups = _group_by_directory(all_images)
-        # En az 2 görüntülü klasörleri al, içerik sayısına göre sırala
-        seq_candidates = [(k, sorted(v)) for k, v in groups.items() if len(v) >= 2]
-        seq_candidates.sort(key=lambda x: len(x[1]), reverse=True)
-
-        if not seq_candidates:
-            self.log.warn("Sıralı sekans bulunamadı (en az 2 görüntülü klasör), DET moduna geçiliyor")
+        """Belirtilen dizi adını veya en çok görüntü içeren klasörü sekans olarak seç, veya bir video dosyası aç."""
+        available = get_available_sequences()
+        
+        if not available:
+            self.log.warn("Sıralı sekans (görüntü/video) bulunamadı, DET moduna geçiliyor")
             self._load_detection_images(all_images)
             return
 
-        if sequence is not None:
-            chosen = None
-            for dirpath, paths in seq_candidates:
-                if os.path.basename(dirpath) == sequence:
-                    chosen = (dirpath, paths)
-                    break
-            if chosen is None:
-                self.log.warn(f"Sekans '{sequence}' bulunamadı, en büyük sekans seçiliyor")
-                chosen = seq_candidates[0]
+        chosen_key = None
+        if sequence is not None and sequence in available:
+            chosen_key = sequence
         else:
-            chosen = seq_candidates[0]
+            if sequence is not None:
+                self.log.warn(f"Sekans '{sequence}' bulunamadı.")
+            
+            # Sequence name is not provided or not valid, pick the largest image sequence, or first video
+            img_seqs = [(k, v) for k, v in available.items() if v["type"] == "image_sequence"]
+            if img_seqs:
+                img_seqs.sort(key=lambda x: x[1]["count"], reverse=True)
+                chosen_key = img_seqs[0][0]
+            else:
+                chosen_key = list(available.keys())[0]
 
-        dirpath, paths = chosen
-        self._sequence_name = os.path.basename(dirpath)
-        self._frames = paths
+        chosen = available[chosen_key]
+        self._sequence_name = chosen_key
         self._mode = "vid"
-        self.log.info(f"Sekans: {self._sequence_name} ({len(paths)} kare)")
+
+        if chosen["type"] == "video":
+            self.log.info(f"Video dosyası açılıyor: {chosen['path']}")
+            self._video_capture = cv2.VideoCapture(chosen["path"])
+            if not self._video_capture.isOpened():
+                self.log.error(f"Video açılamadı: {chosen['path']}")
+                self._video_capture = None
+                return
+            self._video_total_frames = int(self._video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.log.info(f"Sekans: {self._sequence_name} (Video: ~{self._video_total_frames} kare)")
+        else:
+            self._frames = chosen["files"]
+            self.log.info(f"Sekans: {self._sequence_name} (Resim dizisi: {len(self._frames)} kare)")
 
     def _load_detection_images(self, all_images: List[str]) -> None:
         """Tüm görüntülerden rastgele örnek al."""
@@ -117,6 +165,8 @@ class DatasetLoader:
         )
 
     def __len__(self) -> int:
+        if self._video_capture is not None:
+            return max(1, self._video_total_frames)
         return len(self._frames)
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
@@ -124,14 +174,22 @@ class DatasetLoader:
         return self
 
     def __next__(self) -> Dict[str, Any]:
-        while self._index < len(self._frames):
-            frame_path = self._frames[self._index]
-            frame = cv2.imread(frame_path)
+        while True:
+            if self._video_capture is not None:
+                ret, frame = self._video_capture.read()
+                if not ret:
+                    raise StopIteration
+                frame_path = f"video_frame_{self._index:05d}.jpg"
+            else:
+                if self._index >= len(self._frames):
+                    raise StopIteration
+                frame_path = self._frames[self._index]
+                frame = cv2.imread(frame_path)
 
-            if frame is None:
-                self.log.warn(f"Görüntü okunamadı, atlanıyor: {frame_path}")
-                self._index += 1
-                continue
+                if frame is None:
+                    self.log.warn(f"Görüntü okunamadı, atlanıyor: {frame_path}")
+                    self._index += 1
+                    continue
 
             # GPS simülasyonu (şartname 3.2.2): ilk 1 dk sağlıklı, sonra %33 sağlıksız
             if self._mode == "vid":
@@ -141,6 +199,10 @@ class DatasetLoader:
                     gps_health = 0 if random.random() < 0.33 else 1
             else:
                 gps_health = 1
+
+            # Simülasyonda her zaman GPS=0 simüle et (görsel odometri testi)
+            if getattr(Settings, "SIMULATION_FORCE_GPS_UNHEALTHY", False):
+                gps_health = 0
 
             result: Dict[str, Any] = {
                 "frame": frame,
@@ -169,4 +231,10 @@ class DatasetLoader:
 
     @property
     def is_ready(self) -> bool:
+        if self._video_capture is not None:
+            return self._video_capture.isOpened()
         return len(self._frames) > 0
+
+    def __del__(self):
+        if hasattr(self, "_video_capture") and self._video_capture is not None:
+            self._video_capture.release()

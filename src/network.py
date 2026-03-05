@@ -14,9 +14,8 @@ import numpy as np
 import requests
 
 from config.settings import Settings
-from src.gps_health import normalize_gps_health
-from src.payload_adapter import PayloadAdapter
-from src.payload_schema import CompetitionPayloadSchema
+from src.utils import normalize_gps_health
+from src.payload import PayloadAdapter, CompetitionPayloadSchema
 from src.utils import Logger, log_json_to_disk
 
 

@@ -5,13 +5,13 @@ from typing import Dict, Optional, Tuple, TYPE_CHECKING
 import time
 
 if TYPE_CHECKING:
-    from src.frame_context import FrameContext
+    from src.utils import FrameContext
 
 import cv2
 import numpy as np
 
 from config.settings import Settings
-from src.gps_health import normalize_gps_health
+from src.utils import normalize_gps_health
 from src.utils import Logger
 
 
@@ -142,7 +142,10 @@ class VisualOdometry:
         self._ema_dx: float = 0.0
         self._ema_dy: float = 0.0
 
-        self._max_displacement_per_frame: float = 5.0
+        self._max_displacement_per_frame: float = max(
+            0.1,
+            float(getattr(Settings, "VO_MAX_DISPLACEMENT_PER_FRAME", 1.0)),
+        )
         self._gps_reanchor_alpha: float = max(
             0.0, min(1.0, float(Settings.GPS_REANCHOR_ALPHA))
         )
@@ -339,8 +342,27 @@ class VisualOdometry:
             self.log.warn("Başarılı takip sayısı az — referans yenileniyor")
             return False
 
-        dx_pixels = float(np.median(good_new[:, 0] - good_old[:, 0]))
-        dy_pixels = float(np.median(good_new[:, 1] - good_old[:, 1]))
+        displacements_x = good_new[:, 0] - good_old[:, 0]
+        displacements_y = good_new[:, 1] - good_old[:, 1]
+
+        # Rotasyon (pan/yaw) tespiti: kamera sağa/sola dönüyorsa pozisyon güncelleme
+        is_rotation = False
+        if getattr(Settings, "VO_ROTATION_SUPPRESS_ENABLED", True) and len(good_old) >= 6:
+            h_img, w_img = gray.shape[:2]
+            cx, cy = w_img / 2.0, h_img / 2.0
+            rx = good_old[:, 0] - cx
+            ry = good_old[:, 1] - cy
+            dot = np.abs(displacements_x * rx + displacements_y * ry)
+            flow_norm = np.sqrt(displacements_x ** 2 + displacements_y ** 2 + 1e-9)
+            r_norm = np.sqrt(rx ** 2 + ry ** 2 + 1e-9)
+            radial_ratio = dot / (flow_norm * r_norm + 1e-9)
+            thresh = float(getattr(Settings, "VO_ROTATION_DOT_THRESHOLD", 0.4))
+            if float(np.median(radial_ratio)) < thresh and float(np.median(flow_norm)) > 0.5:
+                is_rotation = True
+
+        dx_pixels, dy_pixels = self._robust_displacement(
+            displacements_x, displacements_y
+        )
 
         scale_ratio = 1.0
         if len(good_new) >= 3:
@@ -375,18 +397,20 @@ class VisualOdometry:
         smooth_dx = max(-cap, min(cap, self._ema_dx))
         smooth_dy = max(-cap, min(cap, self._ema_dy))
 
-        self.position["x"] += smooth_dx
-        self.position["y"] += smooth_dy
-        dz_meters = max(-cap, min(cap, (1.0 - scale_ratio) * max(altitude, 1.0)))
-        self.position["z"] = max(0.0, float(self.position["z"]) + dz_meters)
+        if not is_rotation:
+            self.position["x"] += smooth_dx
+            self.position["y"] += smooth_dy
+            dz_meters = max(-cap, min(cap, (1.0 - scale_ratio) * max(altitude, 1.0)))
+            self.position["z"] = max(0.0, float(self.position["z"]) + dz_meters)
 
         self._last_of_position = {k: v for k, v in self.position.items()}
 
+        rot_tag = " [ROT]"
         self.log.debug(
-            f"Optik Akış → dX:{dx_meters:.3f}m dY:{dy_meters:.3f}m dZ:{dz_meters:.3f}m | "
+            f"Optik Akış → dX:{dx_meters:.3f}m dY:{dy_meters:.3f}m dZ:{0.0 if is_rotation else (1.0 - scale_ratio) * max(altitude, 1.0):.3f}m | "
             f"Piksel: ({dx_pixels:.1f}, {dy_pixels:.1f}) | Scale: {scale_ratio:.3f} | "
             f"İrtifa: {altitude:.1f}m | "
-            f"Takip: {len(good_new)}/{len(self._prev_points)} nokta"
+            f"Takip: {len(good_new)}/{len(self._prev_points)} nokta{rot_tag if is_rotation else ''}"
         )
 
         if (
@@ -400,6 +424,31 @@ class VisualOdometry:
             self._prev_points = good_new.reshape(-1, 1, 2)
         return True
 
+    def _robust_displacement(
+        self,
+        dx_arr: np.ndarray,
+        dy_arr: np.ndarray,
+    ) -> Tuple[float, float]:
+        """IQR ile aykırı piksel kaymalarını filtreleyip medyan döndür."""
+        iqr_factor = float(getattr(Settings, "VO_OUTLIER_IQR_FACTOR", 0.0))
+        if iqr_factor <= 0 or len(dx_arr) < 6:
+            return float(np.median(dx_arr)), float(np.median(dy_arr))
+
+        q1_x, q3_x = float(np.percentile(dx_arr, 25)), float(np.percentile(dx_arr, 75))
+        q1_y, q3_y = float(np.percentile(dy_arr, 25)), float(np.percentile(dy_arr, 75))
+        iqr_x = max(1e-6, q3_x - q1_x)
+        iqr_y = max(1e-6, q3_y - q1_y)
+        low_x, high_x = q1_x - iqr_factor * iqr_x, q3_x + iqr_factor * iqr_x
+        low_y, high_y = q1_y - iqr_factor * iqr_y, q3_y + iqr_factor * iqr_y
+
+        mask = (
+            (dx_arr >= low_x) & (dx_arr <= high_x)
+            & (dy_arr >= low_y) & (dy_arr <= high_y)
+        )
+        if np.sum(mask) < 3:
+            return float(np.median(dx_arr)), float(np.median(dy_arr))
+        return float(np.median(dx_arr[mask])), float(np.median(dy_arr[mask]))
+
     def _pixel_to_meter(
         self,
         dx_px: float,
@@ -410,9 +459,14 @@ class VisualOdometry:
         if focal <= 0:
             focal = 800.0
 
-        # Pinhole: metre = piksel * irtifa / focal_length
-        dx_m = dx_px * altitude / focal
-        dy_m = dy_px * altitude / focal
+        sign_x = int(getattr(Settings, "VO_SIGN_X", -1))
+        sign_y = int(getattr(Settings, "VO_SIGN_Y", -1))
+        sign_x = 1 if sign_x >= 0 else -1
+        sign_y = 1 if sign_y >= 0 else -1
+
+        # Pinhole: metre = sign * piksel * irtifa / focal_length
+        dx_m = sign_x * dx_px * altitude / focal
+        dy_m = sign_y * dy_px * altitude / focal
 
         return dx_m, dy_m
 
@@ -460,6 +514,24 @@ class VisualOdometry:
         gps_health: int = 0,
     ) -> Dict[str, float]:
         now_mono = time.monotonic()
+        freeze = bool(getattr(Settings, "GPS_ZERO_POSITION_FREEZE", True))
+
+        if freeze and gps_health == 0:
+            self._mode = "DEGRADED"
+            self._runtime_meta = {
+                "update_mode": "frozen",
+                "state_source": "no_measurement",
+                "quality_flag": "degraded",
+                "reason_code": reason_code,
+                "gps_health": int(gps_health),
+            }
+            self.log.debug(
+                "event=position_frozen "
+                f"reason_code={reason_code} — ölçüm yok, pozisyon değiştirilmedi (şartname)"
+            )
+            self._last_update_monotonic = now_mono
+            return self.get_position()
+
         if self._last_update_monotonic is None:
             dt_sec = 0.0
         else:

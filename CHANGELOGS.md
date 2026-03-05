@@ -1,5 +1,13 @@
 # CHANGELOGS
 
+## 0.0.39 - 2026-03-05
+- **fix(localization)**: Rotasyon (pan/yaw) tespiti — kamera sağa/sola döndüğünde pozisyon güncellemesi bastırılıyor (VO_ROTATION_SUPPRESS_ENABLED, VO_ROTATION_DOT_THRESHOLD).
+- **fix(detection)**: UAP/UAİ için sınıfa özel confidence eşiği (CONFIDENCE_THRESHOLD_UAP_UAI=0.28); Taşıt/İnsan için global eşik (0.40) korunuyor.
+- **feat(detection)**: Genişletilmiş UAP/UAİ alias listesi (uap alani, uap_alani, ambulance landing zone vb.).
+- **feat(config)**: CUSTOM_CLASS_MAP açıklaması güncellendi; VO_SIGN_Y=1 (haritada ileri yön düzeltmesi).
+- **feat(utils)**: Mini-map grid çizgileri, boyut 280px, MAP_MAX_TRAJECTORY_LENGTH=500.
+- **release**: Bumped project version to `0.0.39`.
+
 ## 0.0.38 - 2026-03-03
 - **feat(config)**: Added NMS_MODE (class_aware|agnostic|hybrid), HYBRID_NMS_IOU_THRESHOLD, CLASS_ADAPTIVE_FILTERS per class.
 - **feat(config)**: Added TASK3_REFERENCE_BATCH_SIZE, TASK3_INCLUDE_QUALITY_FIELDS, TASK3_DOMAIN_FALLBACK_* (AKAZE), GPS_REANCHOR_*.

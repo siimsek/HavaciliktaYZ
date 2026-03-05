@@ -33,9 +33,9 @@ from src.competition_contract import (  # noqa: E402
 from src.resilience import SessionResilienceController  # noqa: E402
 from src.runtime_profile import apply_runtime_profile  # noqa: E402
 from src.send_state import apply_send_result_status  # noqa: E402
-from src.utils import Logger, Visualizer, log_json_to_disk  # noqa: E402
-from src.frame_context import FrameContext  # noqa: E402
-from src.gps_health import normalize_gps_health  # noqa: E402
+from src.utils import Logger, Visualizer, log_json_to_disk, get_display_size  # noqa: E402
+from src.utils import FrameContext  # noqa: E402
+from src.utils import normalize_gps_health  # noqa: E402
 from src.flow_policy import (  # noqa: E402
     DuplicateStormAction,
     FetchStrategy,
@@ -150,6 +150,8 @@ def run_simulation(
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    fullscreen_done: List[bool] = [False] if show else []
+
     try:
         for frame_info in loader:
             if not running:
@@ -170,6 +172,7 @@ def run_simulation(
                     visualizer,
                     show,
                     save,
+                    fullscreen_done=fullscreen_done,
                 )
                 if should_stop:
                     break
@@ -200,6 +203,7 @@ def _process_simulation_step(
     visualizer: Any,
     show: bool,
     save: bool,
+    fullscreen_done: Optional[List[bool]] = None,
 ) -> bool:
     frame = frame_info["frame"]
     frame_idx = frame_info["frame_idx"]
@@ -207,9 +211,10 @@ def _process_simulation_step(
     gps_health = frame_info["gps_health"]
 
     frame_ctx = FrameContext(frame)
-    detected_objects = detector.detect(frame)
-    detected_objects = movement.annotate(detected_objects, frame_ctx=frame_ctx)
     position = odometry.update(frame_ctx, server_data)
+    current_z = position.get("z", 50.0) if position else 50.0
+    detected_objects = detector.detect(frame, altitude=current_z)
+    detected_objects = movement.annotate(detected_objects, frame_ctx=frame_ctx)
 
     if image_matcher is not None:
         _ = image_matcher.match(frame)
@@ -218,12 +223,15 @@ def _process_simulation_step(
 
     if show or save:
         try:
+            guardrail_stats = getattr(detector, "_last_guardrail_stats", None) or {}
             annotated = visualizer.draw_detections(
                 frame,
                 detected_objects,
                 frame_id=str(frame_idx),
                 position=position,
                 save_to_disk=not save,
+                guardrail_stats=guardrail_stats,
+                gps_health=gps_health,
             )
         except Exception as exc:
             log.warn(f"Frame {frame_idx}: debug visualizer failed (fail-open): {exc}")
@@ -244,13 +252,58 @@ def _process_simulation_step(
             2,
         )
 
+        # GPS sağlıksız — duraklatma mesajı (SIMULATION_PAUSE_ON_GPS_LOSS aktifse)
+        pause_on_gps_loss = getattr(Settings, "SIMULATION_PAUSE_ON_GPS_LOSS", False)
+        if gps_health == 0 and pause_on_gps_loss and show:
+            h_a, w_a = annotated.shape[:2]
+            pause_text = "GPS sagliksiz — SPACE ile devam"
+            cv2.putText(
+                annotated,
+                pause_text,
+                (w_a // 2 - 180, h_a // 2 + 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 165, 255),
+                2,
+            )
+
         if show:
             try:
-                cv2.imshow("TEKNOFEST - Simulation", annotated)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), 27):
-                    log.info("Window closed by user (q/ESC)")
-                    return True
+                display_img = annotated
+                max_w, max_h = get_display_size()
+                h, w = display_img.shape[:2]
+                if w > max_w or h > max_h:
+                    scale = min(max_w / w, max_h / h)
+                    display_img = cv2.resize(display_img, (int(w * scale), int(h * scale)))
+
+                cv2.namedWindow("TEKNOFEST - Simulation", cv2.WINDOW_NORMAL)
+                # Tam ekran (Show window seçildiğinde)
+                if fullscreen_done and not fullscreen_done[0]:
+                    try:
+                        cv2.setWindowProperty(
+                            "TEKNOFEST - Simulation",
+                            cv2.WND_PROP_FULLSCREEN,
+                            cv2.WINDOW_FULLSCREEN,
+                        )
+                        fullscreen_done[0] = True
+                    except cv2.error:
+                        pass
+                cv2.imshow("TEKNOFEST - Simulation", display_img)
+
+                # GPS sağlıksızken duraklat — SPACE ile devam
+                if gps_health == 0 and pause_on_gps_loss:
+                    while True:
+                        key = cv2.waitKey(100) & 0xFF
+                        if key in (ord("q"), 27):
+                            log.info("Window closed by user (q/ESC)")
+                            return True
+                        if key == ord(" "):
+                            break
+                else:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (ord("q"), 27):
+                        log.info("Window closed by user (q/ESC)")
+                        return True
             except cv2.error:
                 pass
 
@@ -906,6 +959,7 @@ def run_competition(log: Logger) -> None:
                                     success_info["detected_objects"],
                                     frame_id=str(success_info["frame_id"]),
                                     position=success_info["position"],
+                                    guardrail_stats=success_info.get("guardrail_stats"),
                                 )
                         except Exception as exc:
                             log.warn(
@@ -1300,21 +1354,28 @@ def _print_summary(
     log.success("System shutdown complete")
 
 
-def _ask_choice(prompt: str, options: dict) -> str:
+def _ask_choice(prompt: str, options: dict, default: Optional[str] = None) -> str:
     print()
-    print(prompt)
+    if default and default in options:
+        print(f"{prompt} (Default: [{default}] {options[default]})")
+    else:
+        print(prompt)
     for key, desc in options.items():
         print(f"  [{key}] {desc}")
     print()
 
     while True:
         choice = input("  Selection: ").strip()
+        if not choice and default in options:
+            return default
         if choice in options:
             return choice
         print(f"  Invalid selection, choose one of: {', '.join(options.keys())}")
 
 
 def show_interactive_menu() -> dict:
+    from src.data_loader import get_available_sequences
+
     print("\n" + "=" * 56)
     print("  RUN MODE SELECTION")
     print("=" * 56)
@@ -1323,15 +1384,31 @@ def show_interactive_menu() -> dict:
         "  Choose run mode:",
         {
             "1": "Competition (server)",
-            "2": "Simulation VID (sequential frames)",
+            "2": "Simulation VID (sequential frames / video)",
             "3": "Simulation DET (single images)",
         },
+        default="2"
     )
 
     if mode == "1":
         return {"mode": "competition", "prefer_vid": True, "show": False, "save": False}
 
     prefer_vid = mode == "2"
+    sequence = None
+
+    if prefer_vid:
+        seqs = get_available_sequences()
+        if seqs:
+            seq_options = {"0": "Autoselect largest/first"}
+            seq_keys = list(seqs.keys())
+            for i, k in enumerate(seq_keys, 1):
+                info = seqs[k]
+                desc = f"{k} ({info['type']}, {info['count']} items)"
+                seq_options[str(i)] = desc
+            
+            seq_choice = _ask_choice("  Available sequences/videos:", seq_options, default="0")
+            if seq_choice != "0":
+                sequence = seq_keys[int(seq_choice) - 1]
 
     output = _ask_choice(
         "  How do you want outputs?",
@@ -1341,12 +1418,13 @@ def show_interactive_menu() -> dict:
             "3": "Save images",
             "4": "Show window + Save images",
         },
+        default="2"
     )
 
     show = output in ("2", "4")
     save = output in ("3", "4")
 
-    return {"mode": "simulate", "prefer_vid": prefer_vid, "show": show, "save": save}
+    return {"mode": "simulate", "prefer_vid": prefer_vid, "show": show, "save": save, "sequence": sequence}
 
 
 def parse_args() -> argparse.Namespace:
@@ -1448,7 +1526,7 @@ def main() -> None:
 
     print(BANNER)
 
-    if args.interactive:
+    if len(sys.argv) == 1 or args.interactive:
         choices = show_interactive_menu()
     else:
         if args.mode == Settings.COMPETITION_RUNTIME_MODE:
@@ -1493,11 +1571,11 @@ def main() -> None:
     if simulate:
         run_simulation(
             log,
-            prefer_vid=choices["prefer_vid"],
-            show=choices["show"],
-            save=choices["save"],
+            prefer_vid=choices.get("prefer_vid", True),
+            show=choices.get("show", False),
+            save=choices.get("save", False),
             seed=args.seed,
-            sequence=args.sequence,
+            sequence=choices.get("sequence", args.sequence),
         )
     else:
         run_competition(log)
@@ -1707,6 +1785,7 @@ def _fetch_competition_step(
             "frame": None,
             "position": last_position,
             "degraded": degrade_mode,
+            "guardrail_stats": {},
             "detected_translation": {
                 "translation_x": last_position["x"],
                 "translation_y": last_position["y"],
@@ -1748,12 +1827,14 @@ def _fetch_competition_step(
                 "reason_code": "legacy_odometry",
             }
         )
+        guardrail_stats = getattr(detector, "_last_guardrail_stats", None) or {}
         pending_result = {
             "frame_id": frame_id,
             "frame_data": frame_data,
             "detected_objects": detected_objects,
             "frame": frame,
             "position": position,
+            "guardrail_stats": guardrail_stats,
             "degraded": degrade_mode,
             "detected_translation": {
                 "translation_x": position["x"],
@@ -1907,6 +1988,7 @@ def _submit_competition_step(
             "frame_for_debug": pending_result_snapshot.get("frame"),
             "detected_objects": detected_objects,
             "position": pending_result_snapshot.get("position"),
+            "guardrail_stats": pending_result_snapshot.get("guardrail_stats", {}),
             "frame_id": frame_id,
             "frame_data": frame_data,
             "frame_fetch_monotonic": pending_result_snapshot.get("frame_fetch_monotonic"),
