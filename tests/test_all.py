@@ -1369,6 +1369,17 @@ class TestErrorPolicy(unittest.TestCase):
             ErrorDecision.STOP,
         )
 
+    def test_unknown_error_stops_after_degrade_budget(self):
+        p = ErrorPolicy(retry_budget=5, degrade_budget=1)
+        self.assertEqual(
+            p.decide_on_error(ValueError("unknown")),
+            ErrorDecision.DEGRADE,
+        )
+        self.assertEqual(
+            p.decide_on_error(Exception("unknown2")),
+            ErrorDecision.STOP,
+        )
+
 
 class _DummyDetector:
     detect_calls = 0
