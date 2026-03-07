@@ -67,8 +67,46 @@ from src.competition_contract import (
 )
 from src.payload import CompetitionPayloadSchema, PayloadAdapter
 from src.class_contract import CompetitionClassContract
-from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_old_logs
+from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_old_logs, normalize_gps_health
 from main import run_simulation
+
+
+class TestNormalizeGpsHealth(unittest.TestCase):
+    def test_normalize_valid_one(self):
+        self.assertEqual(normalize_gps_health(1), (1, "1"))
+        self.assertEqual(normalize_gps_health("1"), (1, "1"))
+        self.assertEqual(normalize_gps_health(" 1 "), (1, "1"))
+        self.assertEqual(normalize_gps_health(1.0), (1, "1"))
+
+    def test_normalize_valid_zero(self):
+        self.assertEqual(normalize_gps_health(0), (0, "0"))
+        self.assertEqual(normalize_gps_health("0"), (0, "0"))
+        self.assertEqual(normalize_gps_health(" 0 "), (0, "0"))
+        self.assertEqual(normalize_gps_health(0.0), (0, "0"))
+
+    def test_normalize_none_and_empty(self):
+        self.assertEqual(normalize_gps_health(None), (None, "unknown"))
+        self.assertEqual(normalize_gps_health(""), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("   "), (None, "unknown"))
+
+    def test_normalize_invalid_text(self):
+        self.assertEqual(normalize_gps_health("unknown"), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("none"), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("null"), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("nan"), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("invalid"), (None, "unknown"))
+        self.assertEqual(normalize_gps_health("2"), (None, "unknown"))
+
+    def test_normalize_with_fallback(self):
+        self.assertEqual(normalize_gps_health(None, 1), (1, "1"))
+        self.assertEqual(normalize_gps_health(None, "0"), (0, "0"))
+        self.assertEqual(normalize_gps_health(None, "unknown"), (None, "unknown"))
+        # priority to gps_health if both provided
+        self.assertEqual(normalize_gps_health(1, 0), (1, "1"))
+
+    def test_normalize_type_error(self):
+        self.assertEqual(normalize_gps_health([1]), (None, "unknown"))
+        self.assertEqual(normalize_gps_health({"a": 1}), (None, "unknown"))
 
 
 @unittest.skipUnless(main_module is not None, "main runtime missing")
