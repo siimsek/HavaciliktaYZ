@@ -198,8 +198,7 @@ class MovementEstimator:
 
     def _age_tracks(self, matched_track_ids: set) -> None:
         to_delete: List[int] = []
-        for track_id in list(self._tracks.keys()):
-            track = self._tracks[track_id]
+        for track_id, track in self._tracks.items():
             if track_id not in matched_track_ids:
                 track.missed += 1
                 if track.missed > Settings.MOVEMENT_MAX_MISSED_FRAMES:
