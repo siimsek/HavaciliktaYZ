@@ -67,7 +67,7 @@ from src.competition_contract import (
 )
 from src.payload import CompetitionPayloadSchema, PayloadAdapter
 from src.class_contract import CompetitionClassContract
-from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_old_logs
+from src.utils import Logger, log_json_to_disk, _sanitize_log_component, _prune_old_logs, normalize_gps_health, GPS_HEALTH_UNKNOWN, GPS_HEALTH_HEALTHY, GPS_HEALTH_UNHEALTHY
 from main import run_simulation
 
 
@@ -2271,3 +2271,48 @@ class TestNetworkUndefinedObjectSanitization(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["quality_score"], 1.0)
         self.assertEqual(out[0]["quality_flag"], "high")
+
+class TestNormalizeGpsHealth(unittest.TestCase):
+    def test_normalize_gps_health_basic_integers(self):
+        self.assertEqual(normalize_gps_health(1), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health(0), (0, GPS_HEALTH_UNHEALTHY))
+
+    def test_normalize_gps_health_basic_floats(self):
+        self.assertEqual(normalize_gps_health(1.0), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health(0.0), (0, GPS_HEALTH_UNHEALTHY))
+
+    def test_normalize_gps_health_valid_strings(self):
+        self.assertEqual(normalize_gps_health("1"), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health("0"), (0, GPS_HEALTH_UNHEALTHY))
+        self.assertEqual(normalize_gps_health("1.0"), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health("0.0"), (0, GPS_HEALTH_UNHEALTHY))
+
+    def test_normalize_gps_health_fallback_to_status(self):
+        self.assertEqual(normalize_gps_health(None, 1), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health(None, 0), (0, GPS_HEALTH_UNHEALTHY))
+        self.assertEqual(normalize_gps_health(None, "1"), (1, GPS_HEALTH_HEALTHY))
+        self.assertEqual(normalize_gps_health(None, "0"), (0, GPS_HEALTH_UNHEALTHY))
+
+    def test_normalize_gps_health_empty_and_special_strings(self):
+        self.assertEqual(normalize_gps_health(""), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("unknown"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("none"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("null"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("nan"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("  "), (None, GPS_HEALTH_UNKNOWN))
+
+    def test_normalize_gps_health_out_of_bounds(self):
+        self.assertEqual(normalize_gps_health(2), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health(-1), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("2"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("-1"), (None, GPS_HEALTH_UNKNOWN))
+
+    def test_normalize_gps_health_invalid_types_and_strings(self):
+        self.assertEqual(normalize_gps_health("invalid"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health("2.5"), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health([]), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health({}), (None, GPS_HEALTH_UNKNOWN))
+
+    def test_normalize_gps_health_both_none(self):
+        self.assertEqual(normalize_gps_health(None, None), (None, GPS_HEALTH_UNKNOWN))
+        self.assertEqual(normalize_gps_health(None), (None, GPS_HEALTH_UNKNOWN))
